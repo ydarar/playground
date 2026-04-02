@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Create Event - Workspace Hub{% endblock %}
+
+{% block content %}
+<h1>Create Event</h1>
+
+<form class="compose-form" action="/calendar/create" method="post">
+    <div class="form-group">
+        <label for="account_id">Calendar account:</label>
+        <select name="account_id" id="account_id" required>
+            {% for account in accounts %}
+            <option value="{{ account.id }}">{{ account.email }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="summary">Event title:</label>
+        <input type="text" name="summary" id="summary" required placeholder="Meeting title">
+    </div>
+
+    <div class="form-group">
+        <label for="start_time">Start time:</label>
+        <input type="datetime-local" name="start_time" id="start_time" required>
+    </div>
+
+    <div class="form-group">
+        <label for="end_time">End time:</label>
+        <input type="datetime-local" name="end_time" id="end_time" required>
+    </div>
+
+    <div class="form-group">
+        <label for="location">Location:</label>
+        <input type="text" name="location" id="location" placeholder="Meeting room or address">
+    </div>
+
+    <div class="form-group">
+        <label for="description">Description:</label>
+        <textarea name="description" id="description" rows="4" placeholder="Event details..."></textarea>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Create Event</button>
+        <a href="/calendar" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

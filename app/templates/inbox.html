@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Inbox - Workspace Hub{% endblock %}
+
+{% block content %}
+<div class="inbox-header">
+    <h1>Inbox</h1>
+    <div class="inbox-filters">
+        <a href="/inbox" class="btn {% if active_filter == 'all' %}btn-primary{% else %}btn-secondary{% endif %}">All</a>
+        {% for account in accounts %}
+        <a href="/inbox/{{ account.slot }}" class="btn {% if active_filter == account.slot|string %}btn-primary{% else %}btn-secondary{% endif %}">
+            {{ account.email }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<form class="search-bar" action="{{ request.url.path }}" method="get">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search emails...">
+    <button type="submit" class="btn btn-primary">Search</button>
+</form>
+
+{% if messages %}
+<div class="message-list">
+    {% for msg in messages %}
+    <a href="/message/{{ msg.account_id }}/{{ msg.id }}" class="message-item {% if msg.is_unread %}unread{% endif %}">
+        <div class="message-account">
+            <span class="account-badge slot-{{ msg.account_slot }}">{{ msg.account_email }}</span>
+        </div>
+        <div class="message-from">{{ msg.from }}</div>
+        <div class="message-subject">{{ msg.subject }}</div>
+        <div class="message-snippet">{{ msg.snippet }}</div>
+        <div class="message-date">{{ msg.date }}</div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No messages found.</p>
+</div>
+{% endif %}
+{% endblock %}

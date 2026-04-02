@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ message.subject }} - Workspace Hub{% endblock %}
+
+{% block content %}
+<div class="message-view">
+    <a href="/inbox" class="btn btn-secondary">&larr; Back to Inbox</a>
+
+    <div class="message-header">
+        <h1>{{ message.subject }}</h1>
+        <div class="message-meta">
+            <span class="account-badge">via {{ message.account_email }}</span>
+            <div><strong>From:</strong> {{ message.from }}</div>
+            <div><strong>To:</strong> {{ message.to }}</div>
+            <div><strong>Date:</strong> {{ message.date }}</div>
+        </div>
+    </div>
+
+    <div class="message-body">
+        {{ message.body | safe }}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Compose - Workspace Hub{% endblock %}
+
+{% block content %}
+<h1>Compose Email</h1>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+{% if success == "sent" %}
+<div class="alert alert-success">Email sent successfully!</div>
+{% endif %}
+
+<form class="compose-form" action="/compose" method="post">
+    <div class="form-group">
+        <label for="account_id">Send from:</label>
+        <select name="account_id" id="account_id" required>
+            {% for account in accounts %}
+            <option value="{{ account.id }}">{{ account.email }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="to">To:</label>
+        <input type="email" name="to" id="to" required placeholder="recipient@example.com">
+    </div>
+
+    <div class="form-group">
+        <label for="subject">Subject:</label>
+        <input type="text" name="subject" id="subject" required placeholder="Email subject">
+    </div>
+
+    <div class="form-group">
+        <label for="body">Message:</label>
+        <textarea name="body" id="body" rows="12" required placeholder="Write your message..."></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Send Email</button>
+</form>
+{% endblock %}

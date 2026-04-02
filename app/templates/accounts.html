@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Accounts - Workspace Hub{% endblock %}
+
+{% block content %}
+<h1>Connected Accounts</h1>
+
+{% if error %}
+<div class="alert alert-error">
+    {% if error == "invalid_slot" %}Invalid account slot.
+    {% elif error == "invalid_state" %}Authentication failed. Please try again.
+    {% elif error == "duplicate_account" %}This account is already connected in the other slot.
+    {% else %}{{ error }}
+    {% endif %}
+</div>
+{% endif %}
+
+{% if success %}
+<div class="alert alert-success">
+    {% if success == "connected" %}Account connected successfully!
+    {% elif success == "disconnected" %}Account disconnected.
+    {% else %}{{ success }}
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="accounts-grid">
+    {% for slot in [0, 1] %}
+    <div class="account-card">
+        <div class="account-header">Account {{ slot + 1 }}</div>
+        {% if slot in accounts_by_slot %}
+            {% set account = accounts_by_slot[slot] %}
+            <div class="account-info">
+                {% if account.picture_url %}
+                <img src="{{ account.picture_url }}" alt="Profile" class="account-avatar">
+                {% endif %}
+                <div class="account-details">
+                    <strong>{{ account.display_name or account.email }}</strong>
+                    <span class="account-email">{{ account.email }}</span>
+                </div>
+            </div>
+            <div class="account-actions">
+                <a href="/inbox/{{ slot }}" class="btn btn-secondary">View Inbox</a>
+                <a href="/auth/logout/{{ slot }}" class="btn btn-danger">Disconnect</a>
+            </div>
+        {% else %}
+            <div class="account-empty">
+                <p>No account connected</p>
+                <a href="/auth/login/{{ slot }}" class="btn btn-primary">Connect Google Account</a>
+            </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<div class="info-box">
+    <h3>Setup Instructions</h3>
+    <ol>
+        <li>Create a project in the <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a></li>
+        <li>Enable the Gmail API and Google Calendar API</li>
+        <li>Create OAuth 2.0 credentials (Web application type)</li>
+        <li>Add <code>http://localhost:8000/auth/callback</code> as an authorized redirect URI</li>
+        <li>Copy the Client ID and Client Secret to your <code>.env</code> file</li>
+        <li>Add your Google accounts as test users in the OAuth consent screen</li>
+    </ol>
+</div>
+{% endblock %}

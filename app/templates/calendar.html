@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Calendar - Workspace Hub{% endblock %}
+
+{% block content %}
+<div class="calendar-header">
+    <h1>Calendar</h1>
+    <a href="/calendar/create" class="btn btn-primary">+ New Event</a>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+{% if success == "created" %}
+<div class="alert alert-success">Event created successfully!</div>
+{% endif %}
+
+{% if events %}
+<div class="event-list">
+    {% for event in events %}
+    <div class="event-item">
+        <div class="event-time">
+            <span class="event-start">{{ event.start }}</span>
+            <span class="event-separator">-</span>
+            <span class="event-end">{{ event.end }}</span>
+        </div>
+        <div class="event-details">
+            <div class="event-summary">{{ event.summary }}</div>
+            {% if event.location %}
+            <div class="event-location">{{ event.location }}</div>
+            {% endif %}
+            {% if event.description %}
+            <div class="event-description">{{ event.description }}</div>
+            {% endif %}
+            <span class="account-badge slot-{{ event.account_slot }}">{{ event.account_email }}</span>
+        </div>
+        {% if event.html_link %}
+        <a href="{{ event.html_link }}" target="_blank" class="btn btn-secondary btn-sm">Open in Google</a>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No upcoming events.</p>
+</div>
+{% endif %}
+{% endblock %}
