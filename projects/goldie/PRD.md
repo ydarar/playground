@@ -1,6 +1,6 @@
-# PRD — AI Spend Mascot (working title)
+# PRD — Goldie 🐠
 
-> Status: draft v0.1 · Owner: Yasin · Folder will be renamed once we pick a name.
+> Status: draft v0.1 · Owner: Yasin
 
 ## 1. Problem
 
@@ -34,26 +34,40 @@ A small, mostly-silent **desktop mascot** for Apple Silicon Macs that:
 ## 3. Users & context
 - **Just me.** I run agents in Cursor (primary, v1), Claude Code and Codex (v2), and Claude/ChatGPT desktop apps (best-effort, v3+).
 - macOS 26 (Tahoe) or later, Apple Silicon only.
-- Config is a file (`~/.config/<name>/config.toml`). A settings UI is optional.
+- Config is a file (`~/.config/goldie/config.toml`). A settings UI is optional.
 
 ## 4. Experience
 
-### The mascot
+### The mascot: Goldie
 - A **floating desktop pet**: an always-on-top, draggable panel that stays on every Space and never steals focus. It has a menu bar icon for settings and quit.
-- Style: **Funko-Pop-esque "pop-funk" vinyl figure**. The character is TBD (see §10).
-- Personality: **mostly silent**. Mood shows through animation. It speaks (a small speech bubble) only when it matters, or when clicked.
+- **Goldie is a goldfish in a round fishbowl**, styled as a Funko-Pop-esque "pop-funk" vinyl figure: oversized head, big glossy black eyes, chunky fins, saturated orange, and a soft vinyl sheen.
+- **Why a goldfish:** goldfish memory is the whole point. Short context is cheap context. Goldie is happiest with a fresh bowl and a fresh memory.
+- Personality: **mostly silent**. It speaks (a small speech bubble) only when it matters, or when clicked.
+
+### The bowl is the dashboard
+Goldie shows real numbers visually, so you can read state from across the screen without hovering:
+
+| Visual | Encodes |
+|---|---|
+| **Water level** | Monthly budget left (full bowl = $800 left; it drains as you spend) |
+| **Water clarity** | Context bloat of the worst live thread (clear, then cloudy, then murky green) |
+| **Goldie's size / puffiness** | Next-turn cost of the focused thread (Goldie bloats as a thread gets heavy) |
+| **Small fry fish** | One per parallel agent running (a crowded bowl means many agents burning money) |
+| **Swim pattern** | Circling the bowl in tight laps = runaway loop |
 
 ### Moods (the animation set)
 The *decision* of which mood to show comes from the AI brain (see §6). The *set* of moods is finite so we can animate them:
 
-| Mood | Meaning |
-|---|---|
-| Sleeping | No agents active |
-| Working | Agents running, costs healthy |
-| Heavy | A thread is getting expensive per turn |
-| Alarmed | Runaway loop, huge marginal turn, or too many parallel agents burning |
-| Stressed | Monthly pace projects well over $800 |
-| Celebrating | I started fresh after a nudge, or today is under pace |
+| Mood | Meaning | Goldie does |
+|---|---|---|
+| Sleeping | No agents active | Drifts near the bottom, eyes shut, slow "z" bubbles |
+| Working | Agents running, costs healthy | Lazy happy laps, occasional bubble |
+| Heavy | A thread is getting expensive per turn | Puffed up, slow, water clouding. Glances at an empty fresh bowl. |
+| Alarmed | Runaway loop, huge marginal turn, or too many parallel agents burning | Tight frantic circles, wide eyes, bowl flashes |
+| Stressed | Monthly pace projects well over $800 | Water level visibly low. Goldie presses against the glass. |
+| Celebrating | I started fresh after a nudge, or today is under pace | Hops into a fresh clear bowl, flips, sparkle bubbles |
+
+**Signature "start fresh" moment:** a new empty bowl of clear water appears beside Goldie. Clicking it copies the handoff, and Goldie jumps across. The nudge copy stays tiny: *"fresh water?"*
 
 ### Interactions
 - **Hover** shows a mini card: today's $, month-to-date vs $800, projected month-end, and the most expensive live thread's next-turn cost.
@@ -104,7 +118,7 @@ The app is harness-agnostic: each harness gets an adapter that emits normalized 
 | Source | Mechanism | Phase |
 |---|---|---|
 | **Bedrock gateway** | Your existing alias commands (**details pending from Yasin**). Ground truth for MTD spend. | v1 |
-| **Cursor** | (a) Cursor agent hooks (`~/.cursor/hooks.json`) call our tiny `…-hook` CLI for real-time turn/stop events. (b) Read Cursor's local state DB (`state.vscdb`, composer/bubble records) for token counts and model. **Needs a spike to confirm the fields.** | v1 |
+| **Cursor** | (a) Cursor agent hooks (`~/.cursor/hooks.json`) call our tiny `goldie-hook` CLI for real-time turn/stop events. (b) Read Cursor's local state DB (`state.vscdb`, composer/bubble records) for token counts and model. **Needs a spike to confirm the fields.** | v1 |
 | **Claude Code** | Tail `~/.claude/projects/**/*.jsonl` (per-message `usage`) plus Claude Code hooks (`Stop`, `UserPromptSubmit`) | v2 |
 | **Codex** | Tail `~/.codex/sessions/**/rollout-*.jsonl` (`token_count` events) plus `notify` hook | v2 |
 | **Desktop chat apps** | No local usage data. At most "app is active" presence. | v3 / maybe never |
@@ -130,16 +144,15 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 
 | # | Scope | Exit criteria |
 |---|---|---|
-| **M0 Spikes** | Get the gateway alias details. Verify Cursor hook payloads and `state.vscdb` token fields on my machine. Pick the MLX model. Pick the mascot and name. | Written findings in `docs/spikes.md` |
+| **M0 Spikes** | Get the gateway alias details. Verify Cursor hook payloads and `state.vscdb` token fields on my machine. Pick the MLX model. Commission/draw Goldie concept art. | Written findings in `docs/spikes.md` |
 | **M1 Skeleton** | Menu bar + floating panel with a placeholder mascot. Cursor adapter, event store, signal engine. Deterministic moods only. | Live per-thread `$ / next turn` for Cursor on screen |
 | **M2 Brain** | MLX brain, speech budget, feedback loop, handoff generation. | Nudges feel right for a week of real use |
 | **M3 Money** | Gateway MTD meter, projection, daily allowance, Stressed mood. | Pet numbers match the gateway within a few % |
 | **M4 More harnesses** | Claude Code and Codex adapters. | All three harnesses in one view |
-| **M5 Character** | Final pop-funk art and animations for every mood. | Looks good enough to leave on all day |
+| **M5 Goldie** | Final pop-funk Goldie + bowl art, a Rive state machine for every mood and the bowl encodings. | Looks good enough to leave on all day |
 
 ## 10. Open questions
 1. **Gateway aliases:** what do they call (CLI, HTTP, log) and what do they return? Can the gateway break spend down by client (Cursor vs Claude Code vs Codex) or by request?
 2. **Does Cursor route through the Bedrock gateway** (your own keys), or through Cursor's own billing? This changes which numbers are ground truth for Cursor.
 3. Is the budget per calendar month, or on a billing cycle date?
-4. Mascot character and name. Brainstorm next.
-5. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
+4. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
