@@ -1,3 +1,5 @@
+// Debug-only: release builds can't @testable import. Run with `swift run goldie-selftest`.
+#if DEBUG
 import Foundation
 // Runs under goldie-selftest (Shim.swift provides XCTest-style assertions; no Xcode needed).
 @testable import GoldieCore
@@ -501,8 +503,21 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(snap.bloatLabel, "goldie-big.txt")
     }
 
+    func testLedgerKeepsNewestCopyOfARefetchedEvent() {
+        var first = event(now.addingTimeInterval(-60), cents: 10)
+        first.conversationId = "c1"
+        var updated = first
+        updated.chargedCents = 9  // Cursor updated the charge between fetches
+        var ledger = UsageLedger()
+        ledger.merge([first], now: now)
+        ledger.merge([updated], now: now)
+        XCTAssertEqual(ledger.events.count, 1)
+        XCTAssertEqual(ledger.events.first?.chargedCents, 9)
+    }
+
     func testProbeHidesPathLikeKeys() {
         XCTAssertEqual(CursorProbe.describe(["file:///Users/me/secret.swift": 1]), "object(1 keys, names hidden)")
         XCTAssertEqual(CursorProbe.describe(["modelName": "x", "maxMode": 0] as [String: Any]), "object{maxMode,modelName}")
     }
 }
+#endif

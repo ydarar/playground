@@ -1,3 +1,5 @@
+// Debug-only: release builds can't @testable import. Run with `swift run goldie-selftest`.
+#if DEBUG
 import Foundation
 
 // A tiny stand-in for XCTest so the tests run with only the Command Line Tools
@@ -72,3 +74,4 @@ func XCTUnwrap<T>(_ a: @autoclosure () throws -> T?, file: StaticString = #fileP
     }
     return v
 }
+#endif

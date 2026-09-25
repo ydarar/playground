@@ -28,12 +28,18 @@ public struct UsageLedger {
 
     public var isEmpty: Bool { lastMergeAt == nil }
 
+    /// Fetches overlap, so the same request can arrive twice, possibly with updated fields
+    /// (e.g. charged amount). Identity is when/what/which chat; the newest copy wins.
     public mutating func merge(_ new: [UsageEvent], now: Date) {
         let monthStart = Self.monthStart(now)
-        var set = Set(events)
-        set.formUnion(new)
-        events = set.filter { $0.at >= monthStart }.sorted { $0.at < $1.at }
+        var byKey: [String: UsageEvent] = [:]
+        for e in events + new { byKey[Self.identity(e)] = e }
+        events = byKey.values.filter { $0.at >= monthStart }.sorted { $0.at < $1.at }
         lastMergeAt = now
+    }
+
+    static func identity(_ e: UsageEvent) -> String {
+        "\(e.at.timeIntervalSince1970)|\(e.model)|\(e.conversationId ?? "-")|\(e.inputTokens)|\(e.outputTokens)|\(e.cacheReadTokens)"
     }
 
     /// Re-fetch a little overlap so late-arriving events aren't missed; duplicates merge away.

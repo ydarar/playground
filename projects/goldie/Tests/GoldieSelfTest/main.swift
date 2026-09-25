@@ -3,6 +3,7 @@ import Foundation
 // Runs every test in GoldieCoreTests. Add new tests to this list.
 // Usage: swift run goldie-selftest   (debug build; @testable needs it)
 
+#if DEBUG
 let suite = GoldieCoreTests()
 let tests: [(String, () throws -> Void)] = [
     ("testRulesMoodBands", suite.testRulesMoodBands),
@@ -40,6 +41,7 @@ let tests: [(String, () throws -> Void)] = [
     ("testUsageEventReconciliationFields", suite.testUsageEventReconciliationFields),
     ("testBigReadIgnoresScreenshots", suite.testBigReadIgnoresScreenshots),
     ("testProbeHidesPathLikeKeys", suite.testProbeHidesPathLikeKeys),
+    ("testLedgerKeepsNewestCopyOfARefetchedEvent", suite.testLedgerKeepsNewestCopyOfARefetchedEvent),
 ]
 
 var failedTests = 0
@@ -57,3 +59,7 @@ for (name, run) in tests {
 }
 print("\n\(tests.count - failedTests)/\(tests.count) tests passed")
 exit(failedTests == 0 ? 0 : 1)
+#else
+print("goldie-selftest needs a debug build: swift run goldie-selftest")
+exit(1)
+#endif
