@@ -197,4 +197,27 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(CostModel.nearestDistance(now.addingTimeInterval(500), in: times), 300)
         XCTAssertNil(CostModel.nearestDistance(now, in: []))
     }
+
+    // MARK: Budget
+
+    func testStressedWhenMonthRunsHotButNoChatIsToBlame() {
+        var snap = snapshot([thread(ratio: 1.5)])
+        snap.projectedMonthUSD = 1200
+        let v = HeuristicBrain.judge(snap, config: GoldieConfig(), snoozed: [])
+        XCTAssertEqual(v.mood, .stressed)
+        XCTAssertFalse(v.speak)
+
+        // A heavy chat still wins: that's the actionable thing.
+        var heavy = snapshot([thread(ratio: 5)])
+        heavy.projectedMonthUSD = 1200
+        XCTAssertEqual(HeuristicBrain.judge(heavy, config: GoldieConfig(), snoozed: []).mood, .heavy)
+    }
+
+    func testProjectionIsFilledFromLedger() {
+        var ledger = UsageLedger()
+        ledger.merge([event(now.addingTimeInterval(-60), cents: 1000)], now: now)
+        let s = CostModel.enrich(snapshot([]), ledger: ledger, config: GoldieConfig(), now: now)
+        XCTAssertEqual(s.monthUSD ?? 0, 10, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(s.projectedMonthUSD ?? 0, 10)
+    }
 }

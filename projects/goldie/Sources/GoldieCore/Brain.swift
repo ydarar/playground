@@ -63,6 +63,13 @@ public enum HeuristicBrain {
                            reason: "Only snoozed threads are active.", source: "rules")
         }
         let nudging = winner.mood == .heavy || winner.mood == .alarmed
+        if !nudging, let projected = snap.projectedMonthUSD, projected > config.monthlyBudgetUSD * 1.05 {
+            // No single chat to blame, but the month is running hot: show it, don't say it.
+            return Verdict(mood: .stressed, speak: false, targetThread: nil, message: nil,
+                           reason: String(format: "Chats look fine, but at this pace Cursor reaches ~$%.0f this month (budget $%.0f).",
+                                          projected, config.monthlyBudgetUSD),
+                           source: "rules")
+        }
         return Verdict(mood: winner.mood, speak: nudging, targetThread: nudging ? winner.thread.id : nil,
                        message: winner.message, reason: winner.reason, source: "rules")
     }

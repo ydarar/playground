@@ -29,6 +29,8 @@ public struct GoldieConfig: Codable, Equatable {
     /// Read your Cursor usage (per-request $) with your existing Cursor login. Read-only; the
     /// login token is only ever sent to cursor.com, exactly like the Cursor app does.
     public var cursorUsageAPI: Bool = true
+    /// Monthly AI budget. Goldie's water level is the share of it that's left.
+    public var monthlyBudgetUSD: Double = 800
     public var usageRefreshMinutes: Double = 2
     /// A usage event is matched to the chat with agent activity closest in time, within this window.
     public var attributionToleranceSeconds: Double = 120

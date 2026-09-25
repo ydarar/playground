@@ -43,13 +43,17 @@ Cursor state.vscdb (read-only) ────────────────�
 
 | You see | It means |
 |---|---|
+| Water level | Monthly budget left (`monthlyBudgetUSD`, default $800). It drains as you spend |
 | Cloudy / murky water | Your heaviest thread's context is growing |
 | Goldie puffed up | The flagged thread costs a lot per turn |
 | Tight frantic circles | Runaway loop, or too many agents at once |
 | Small fry | Extra agents running in parallel |
 | A fresh bowl appears: *"fresh water?"* | Click it to copy a handoff prompt, then paste it into a new chat |
-| Click Goldie | Details: every live thread, the brain's reasoning, handoff / snooze / not-helpful buttons |
-| Drag Goldie | Moves her |
+| Goldie looks stressed but says nothing | No single chat is to blame, but the month is on pace to go over budget |
+| Hover Goldie | Quick peek: mood and today's $ |
+| Click Goldie (or her speech bubble) | Details: budget bar, Goldie's verdict with **Start fresh**, chats sorted by what needs you, setup checklist if something's missing |
+| Drag Goldie | Moves her. She remembers the spot. Menu bar → Size for Small / Medium / Large |
+| Menu bar `🐠 $3.20 •` | Today's spend; the dot means Goldie has a suggestion |
 
 ## Run it
 
@@ -103,7 +107,6 @@ Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
 - `rowid` ordering is used as a fast "recently updated" index. The probe compares it against `lastUpdatedAt`.
 - The Cursor usage endpoint (`/api/dashboard/get-filtered-usage-events`) is what cursor.com's dashboard uses. It's undocumented. `goldiectl usage` shows whether it works for your account.
 - Per-chat $ is matched by time, so two chats running at the same second can swap a few cents.
-- Water level (monthly budget) is always full for now.
 
 ## Layout
 

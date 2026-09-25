@@ -26,7 +26,8 @@ public final class LLMBrain {
     - context_tokens: tokens re-read on every step; context_ratio: how many times cheaper a step would be in a new chat
     - cost_per_step_usd, last_message_usd, spent_usd: real dollars from Cursor usage when present
     - loop signals: steps_since_user_message, max_repeat_command, max_repeat_file_edit, loop_score (0-1)
-    - running, minutes_idle, model, max_mode, parallel_threads, today_usd, month_usd (budget: $800/month)
+    - running, minutes_idle, model, max_mode, parallel_threads, today_usd, month_usd, projected_month_usd \
+    (budget: $800/month; "stressed" = month on pace to exceed it with no single chat to blame)
     plus a rules-based suggestion and recent nudges with the user's feedback.
 
     Decide Goldie's mood and whether it should speak. Guidance:
@@ -112,6 +113,7 @@ public final class LLMBrain {
         ]
         if let today = ctx.snapshot.todayUSD { root["today_usd"] = (today * 100).rounded() / 100 }
         if let month = ctx.snapshot.monthUSD { root["month_usd"] = (month * 100).rounded() / 100 }
+        if let projected = ctx.snapshot.projectedMonthUSD { root["projected_month_usd"] = projected.rounded() }
         let data = (try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])) ?? Data()
         return (String(data: data, encoding: .utf8) ?? "{}", idMap)
     }

@@ -40,12 +40,19 @@ struct MenuContent: View {
     let togglePanel: () -> Void
 
     var body: some View {
-        Text("Goldie is \(engine.verdict.mood.rawValue)")
-        Text("Today \(Fmt.usd(engine.snapshot.todayUSD)) · this month \(Fmt.usd(engine.snapshot.monthUSD))")
-        Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
-        Text("Cursor costs: \(engine.usageStatus)")
+        Group {
+            Text("Goldie: \(engine.verdict.mood.label)")
+            Text("Today \(Fmt.usd(engine.snapshot.todayUSD)) · this month \(Fmt.usd(engine.snapshot.monthUSD))")
+            Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
+            Text("Cursor costs: \(engine.usageStatus)")
+        }
         Divider()
         Button("Show / hide Goldie") { togglePanel() }
+        Picker("Size", selection: $engine.bowlSize) {
+            Text("Small").tag(130.0)
+            Text("Medium").tag(170.0)
+            Text("Large").tag(210.0)
+        }
         Button("Install Cursor hooks") { engine.installHooks() }
         Button("Open config") { engine.openConfig() }
         Divider()
@@ -60,7 +67,7 @@ final class GoldiePanel: NSPanel {
 
 @MainActor
 final class PanelController {
-    static let size = NSSize(width: 380, height: 860)
+    static let size = NSSize(width: 380, height: 820)
     let panel: GoldiePanel
     private let mover: WindowMover
     private let engine: GoldieEngine
@@ -80,10 +87,25 @@ final class PanelController {
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: GoldieRootView(engine: engine, mover: mover))
 
-        if let screen = NSScreen.main?.visibleFrame {  // bottom-right corner
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "goldie.panelX") != nil {  // where you last left her
+            panel.setFrameOrigin(NSPoint(x: defaults.double(forKey: "goldie.panelX"), y: defaults.double(forKey: "goldie.panelY")))
+        } else if let screen = NSScreen.main?.visibleFrame {  // first launch: bottom-right corner
             panel.setFrameOrigin(NSPoint(x: screen.maxX - Self.size.width - 12, y: screen.minY + 12))
         }
+        Self.clampAndSave(panel)
         panel.orderFrontRegardless()
+    }
+
+    /// Keep the whole panel on screen (so the details card never opens off-screen) and remember the spot.
+    static func clampAndSave(_ panel: NSPanel) {
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        var origin = panel.frame.origin
+        origin.x = min(max(origin.x, visible.minX), visible.maxX - panel.frame.width)
+        origin.y = min(max(origin.y, visible.minY), visible.maxY - panel.frame.height)
+        panel.setFrameOrigin(origin)
+        UserDefaults.standard.set(origin.x, forKey: "goldie.panelX")
+        UserDefaults.standard.set(origin.y, forKey: "goldie.panelY")
     }
 
     func toggle() {
@@ -109,5 +131,8 @@ final class WindowMover {
         panel.setFrameOrigin(NSPoint(x: s.origin.x + mouse.x - s.mouse.x, y: s.origin.y + mouse.y - s.mouse.y))
     }
 
-    func end() { start = nil }
+    func end() {
+        start = nil
+        if let panel { PanelController.clampAndSave(panel) }
+    }
 }

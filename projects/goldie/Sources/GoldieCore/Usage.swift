@@ -154,7 +154,12 @@ public enum CostModel {
         var out = snap
         guard !ledger.isEmpty else { return out }
         out.todayUSD = ledger.totalUSD(since: Calendar.current.startOfDay(for: now))
-        out.monthUSD = ledger.totalUSD(since: UsageLedger.monthStart(now))
+        let month = ledger.totalUSD(since: UsageLedger.monthStart(now))
+        out.monthUSD = month
+        if let interval = Calendar.current.dateInterval(of: .month, for: now) {
+            let elapsed = max(now.timeIntervalSince(interval.start), 24 * 3600)  // avoid wild day-1 projections
+            out.projectedMonthUSD = month * interval.duration / elapsed
+        }
 
         let earliest = snap.threads.compactMap { $0.activityTimes.first }.min() ?? now
         let candidates = ledger.events.filter { $0.at >= earliest.addingTimeInterval(-config.attributionToleranceSeconds) }

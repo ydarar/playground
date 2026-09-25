@@ -48,6 +48,8 @@ public struct Snapshot: Codable, Equatable {
     public var hookEventsSeen: Bool
     public var todayUSD: Double? = nil
     public var monthUSD: Double? = nil
+    /// Month-to-date spend extrapolated to the end of the month.
+    public var projectedMonthUSD: Double? = nil
 
     public static let empty = Snapshot(threads: [], parallelCount: 0, takenAt: .distantPast, cursorDBFound: false, hookEventsSeen: false)
 

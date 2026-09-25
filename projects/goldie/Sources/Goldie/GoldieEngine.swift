@@ -11,7 +11,7 @@ struct Speech: Equatable {
 /// Visual encodings for the bowl (see PRD §4 "The bowl is the dashboard").
 struct BowlState: Equatable {
     var mood: Mood = .sleeping
-    /// Monthly budget left. POC: always full (spend meters come later).
+    /// Share of the monthly budget left (full until costs are known).
     var waterLevel: Double = 1
     /// 0 = clear, 1 = murky. Driven by the worst thread's context ratio.
     var murk: Double = 0
@@ -32,6 +32,15 @@ final class GoldieEngine: ObservableObject {
     @Published var expanded = false
     /// Animations pause while the panel is hidden.
     @Published var panelVisible = true
+    /// Bowl diameter in points (Small 130 / Medium 170 / Large 210), remembered across launches.
+    @Published var bowlSize: Double = GoldieEngine.savedBowlSize() {
+        didSet { UserDefaults.standard.set(bowlSize, forKey: "goldie.bowlSize") }
+    }
+
+    nonisolated private static func savedBowlSize() -> Double {
+        let v = UserDefaults.standard.double(forKey: "goldie.bowlSize")
+        return v >= 100 ? v : 170
+    }
 
     let config: GoldieConfig
     private let collector: SnapshotCollector
@@ -80,6 +89,9 @@ final class GoldieEngine: ObservableObject {
         let focus = snapshot.thread(verdict.targetThread)?.contextRatio ?? worst
         s.puff = 1 + 0.35 * clamp01((focus - 1) / max(config.alarmedRatio - 1, 1))
         s.fryCount = min(5, max(0, snapshot.parallelCount - 1))
+        if let month = snapshot.monthUSD, config.monthlyBudgetUSD > 0 {
+            s.waterLevel = max(0.15, 1 - month / config.monthlyBudgetUSD)  // never fully empty: she needs water
+        }
         return s
     }
 
@@ -93,14 +105,12 @@ final class GoldieEngine: ObservableObject {
     /// Menu bar text: today's spend once known.
     var menuTitle: String {
         guard let today = snapshot.todayUSD else { return "🐠" }
-        return "🐠 " + Fmt.usd(today)
+        return "🐠 " + Fmt.usd(today) + (nudgeTarget != nil ? " •" : "")
     }
 
-    var emptyHint: String? {
-        if !snapshot.cursorDBFound { return "Cursor's state DB wasn't found. Is Cursor installed?" }
-        if !snapshot.hookEventsSeen { return "No hook events yet. Menu bar → Install Cursor hooks, then restart Cursor." }
-        if snapshot.threads.isEmpty { return "No Cursor agent activity in the last \(Int(config.activeWindowMinutes)) min." }
-        return nil
+    /// Show the setup checklist until the basics work.
+    var needsSetup: Bool {
+        !snapshot.cursorDBFound || !snapshot.hookEventsSeen || usageStatus.hasPrefix("unavailable")
     }
 
     // MARK: Loop
@@ -208,7 +218,9 @@ final class GoldieEngine: ObservableObject {
                 NSPasteboard.general.setString(text, forType: .string)
                 self.judge.recordFeedback(thread: threadID, feedback: "copied handoff")
                 self.speech = nil
-                self.showToast("handoff copied. paste it into a new chat 🐠")
+                self.expanded = false
+                self.showToast("Handoff copied. In Cursor: start a new chat and paste (⌘V).", seconds: 6)
+                Self.bringCursorForward()
             }
         }
     }
@@ -244,6 +256,16 @@ final class GoldieEngine: ObservableObject {
     func openConfig() {
         NSWorkspace.shared.open(GoldieConfig.writeDefaultIfMissing())
     }
+
+    /// After "Start fresh", put Cursor in front so the paste is one keystroke away.
+    private static func bringCursorForward() {
+        let cursor = NSWorkspace.shared.runningApplications.first {
+            $0.localizedName == "Cursor" || ($0.bundleIdentifier ?? "").lowercased().contains("cursor")
+        }
+        cursor?.activate()
+    }
+
+    func dismissSpeech() { speech = nil }
 
     private func showToast(_ text: String, seconds: Double = 3) {
         toast = text
