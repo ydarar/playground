@@ -66,34 +66,36 @@ struct BowlView: View {
         }
     }
 
+    // Geometry, as offsets from the bowl's center (y grows downward).
+    private var r: CGFloat { size / 2 }
+    /// Water fills 50% (budget gone) to 82% (budget untouched) of the bowl: there's always water to swim in.
+    private var waterTop: CGFloat { r - size * CGFloat(0.5 + 0.32 * clamp01(state.waterLevel)) }
+    private var sandTop: CGFloat { r * 0.52 }
+    /// Where Goldie's center may be: under the surface, above the sand (never an inverted range).
+    private var swimRange: ClosedRange<CGFloat> {
+        let top = waterTop + r * 0.2
+        return top...max(top, sandTop - r * 0.1)
+    }
+    /// The bowl is a sphere with the top cut off at ±30° around the top.
+    private var rimY: CGFloat { -r * 0.866 }
+
     var body: some View {
         TimelineView(.animation(minimumInterval: frameInterval, paused: paused)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             ZStack {
                 ZStack {
-                    Circle().fill(Color.white.opacity(0.10))
-                    Water(level: state.waterLevel, murk: state.murk, size: size)
+                    Circle().fill(Color.white.opacity(0.08))  // glass tint
                     sand
                     plant(t)
-                    // Murk = drifting specks (a heavy chat), not green water.
+                    water
                     ForEach(0..<speckCount, id: \.self) { i in speck(i, t) }
                     ForEach(0..<4, id: \.self) { i in bubble(i, t) }
                     ForEach(0..<state.fryCount, id: \.self) { i in fry(i, t) }
-                    GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size, hovering: hovering)
+                    GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size, hovering: hovering,
+                               swimRange: swimRange)
                 }
                 .clipShape(Circle())
-                // (No .drawingGroup(): it cut little CPU but kept ~200 MB of offscreen buffers alive.)
-                // glass
-                Circle().strokeBorder(
-                    LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 3)
-                Circle().trim(from: 0.56, to: 0.68)
-                    .stroke(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .padding(14)
-                // rim
-                Ellipse().stroke(Color.white.opacity(0.6), lineWidth: 3)
-                    .frame(width: size * 0.55, height: size * 0.09)
-                    .offset(y: -size * 0.46)
+                glass
             }
             .frame(width: size, height: size)
             .background(alignment: .bottom) {  // grounds the bowl on the desk (gradient, not a live blur)
@@ -107,14 +109,55 @@ struct BowlView: View {
         }
     }
 
+    /// Open-topped glass: an arc that stops where the top is cut, a rim at the cut, and a highlight.
+    private var glass: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: 300.0 / 360.0)  // leave a 60° opening at the top
+                .stroke(LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.18)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-60))
+                .padding(1.5)
+            Ellipse()  // the rim, exactly where the glass ends
+                .stroke(Color.white.opacity(0.65), lineWidth: 2.5)
+                .frame(width: r * 1.0, height: size * 0.07)
+                .offset(y: rimY)
+            Circle().trim(from: 0.56, to: 0.66)  // highlight
+                .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .padding(14)
+        }
+        .frame(width: size, height: size)
+    }
+
+    private var water: some View {
+        let m = clamp01(state.murk)
+        let color = Color(red: 0.56 + (0.52 - 0.56) * m, green: 0.82 + (0.72 - 0.82) * m, blue: 0.97 + (0.74 - 0.97) * m)
+        let depth = r - waterTop
+        // Width of the bowl at the waterline, for the surface ellipse.
+        let chord = 2 * sqrt(max(0, r * r - waterTop * waterTop))
+        return ZStack {
+            Rectangle()
+                .fill(LinearGradient(colors: [color.opacity(0.45 + 0.1 * m), color.opacity(0.7 + 0.1 * m)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: size, height: depth)
+                .offset(y: waterTop + depth / 2)
+            Ellipse()  // the surface
+                .fill(color.opacity(0.35))
+                .overlay(Ellipse().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                .frame(width: chord, height: size * 0.06)
+                .offset(y: waterTop)
+        }
+    }
+
     private var speckCount: Int { Int((clamp01(state.murk) * 16).rounded()) }
 
-    /// Fixed pseudo-random spots so specks don't jump around between frames.
+    /// Fixed pseudo-random spots (so specks don't jump between frames), always underwater.
     private func speck(_ i: Int, _ t: Double) -> some View {
         let rx = abs(sin(Double(i) * 12.9898) * 43758.5453).truncatingRemainder(dividingBy: 1)
         let ry = abs(sin(Double(i) * 78.233) * 12345.678).truncatingRemainder(dividingBy: 1)
-        let x = CGFloat(rx - 0.5) * size * 0.72 + CGFloat(sin(t * 0.25 + Double(i))) * 4
-        let y = CGFloat(ry * 0.6 - 0.15) * size + CGFloat(cos(t * 0.2 + Double(i) * 1.3)) * 3
+        let x = CGFloat(rx - 0.5) * size * 0.7 + CGFloat(sin(t * 0.25 + Double(i))) * 4
+        let y = waterTop + 6 + CGFloat(ry) * (sandTop - waterTop - 10) + CGFloat(cos(t * 0.2 + Double(i) * 1.3)) * 3
         let d = CGFloat(2 + i % 3)
         return Circle()
             .fill(Color(red: 0.45, green: 0.42, blue: 0.28).opacity(0.55))
@@ -127,34 +170,36 @@ struct BowlView: View {
             Ellipse()
                 .fill(LinearGradient(colors: [Color(red: 0.93, green: 0.84, blue: 0.64), Color(red: 0.82, green: 0.70, blue: 0.50)],
                                      startPoint: .top, endPoint: .bottom))
-                .frame(width: size * 0.95, height: size * 0.26)
-                .offset(y: size * 0.44)
-            Ellipse().fill(Color.gray.opacity(0.55)).frame(width: 9, height: 6).offset(x: size * 0.12, y: size * 0.36)
-            Ellipse().fill(Color(red: 0.55, green: 0.5, blue: 0.6).opacity(0.6)).frame(width: 7, height: 5).offset(x: size * 0.2, y: size * 0.38)
-            Ellipse().fill(Color.white.opacity(0.5)).frame(width: 6, height: 4).offset(x: -size * 0.05, y: size * 0.39)
+                .frame(width: size * 1.05, height: size * 0.34)
+                .offset(y: sandTop + size * 0.17)
+            Ellipse().fill(Color.gray.opacity(0.55)).frame(width: 9, height: 6).offset(x: size * 0.12, y: sandTop + 10)
+            Ellipse().fill(Color(red: 0.55, green: 0.5, blue: 0.6).opacity(0.6)).frame(width: 7, height: 5).offset(x: size * 0.2, y: sandTop + 13)
+            Ellipse().fill(Color.white.opacity(0.5)).frame(width: 6, height: 4).offset(x: -size * 0.05, y: sandTop + 12)
         }
     }
 
     private func plant(_ t: Double) -> some View {
         let green = Color(red: 0.24, green: 0.62, blue: 0.36)
+        let height = min(size * 0.24, max(10, sandTop - waterTop - 8))  // never pokes out of the water
         return ZStack(alignment: .bottom) {
             Capsule().fill(green)
-                .frame(width: 6, height: size * 0.22)
+                .frame(width: 6, height: height)
                 .rotationEffect(.degrees(sin(t * 0.8) * 6 - 8), anchor: .bottom)
             Capsule().fill(green.opacity(0.85))
-                .frame(width: 5, height: size * 0.16)
+                .frame(width: 5, height: height * 0.72)
                 .rotationEffect(.degrees(sin(t * 0.9 + 1) * 7 + 14), anchor: .bottom)
         }
-        .frame(width: 30, height: size * 0.24, alignment: .bottom)
-        .offset(x: -size * 0.27, y: size * 0.24)
+        .frame(width: 30, height: height, alignment: .bottom)
+        .offset(x: -size * 0.27, y: sandTop + 6 - height / 2)
     }
 
+    /// Bubbles rise from the sand and pop at the surface.
     private func bubble(_ i: Int, _ t: Double) -> some View {
         let speed = state.mood == .sleeping ? 0.1 : (state.mood == .alarmed ? 0.5 : 0.22)
         let phase = (t * speed + Double(i) * 0.27).truncatingRemainder(dividingBy: 1)
         let xs: [CGFloat] = [-0.22, 0.16, -0.05, 0.26]
         let x = xs[i % 4] * size + CGFloat(sin(t * 2 + Double(i))) * 3
-        let y = size * 0.36 - CGFloat(phase) * size * 0.62
+        let y = sandTop - CGFloat(phase) * (sandTop - waterTop)
         let d = CGFloat(4 + i * 2)
         return Circle()
             .stroke(Color.white.opacity(0.65 * (1 - phase)), lineWidth: 1.3)
@@ -164,38 +209,15 @@ struct BowlView: View {
 
     private func fry(_ i: Int, _ t: Double) -> some View {
         let s = t * (0.9 + Double(i) * 0.17) + Double(i) * 1.7
-        let x = CGFloat(sin(s)) * size * 0.3
-        let y = size * 0.2 + CGFloat(cos(s * 1.3)) * size * 0.08
+        let x = CGFloat(sin(s)) * size * 0.28
+        let mid = (waterTop + sandTop) / 2
+        let y = mid + CGFloat(cos(s * 1.3)) * (sandTop - waterTop) * 0.3
         return ZStack {
             Ellipse().fill(Color(red: 1, green: 0.55, blue: 0.2)).frame(width: 14, height: 8)
             Circle().fill(Color.black).frame(width: 3, height: 3).offset(x: 3, y: -1)
         }
         .scaleEffect(x: cos(s) > 0 ? 1 : -1, y: 1)
         .offset(x: x, y: y)
-    }
-}
-
-struct Water: View {
-    let level: Double
-    let murk: Double
-    let size: CGFloat
-
-    var body: some View {
-        // Stays water-colored when murky (a slight grey-teal), the specks carry the "dirty" signal.
-        let m = clamp01(murk)
-        let color = Color(red: 0.56 + (0.52 - 0.56) * m, green: 0.82 + (0.72 - 0.82) * m, blue: 0.97 + (0.74 - 0.97) * m)
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            Rectangle()
-                .fill(LinearGradient(colors: [color.opacity(0.5 + 0.1 * m), color.opacity(0.75 + 0.1 * m)],
-                                     startPoint: .top, endPoint: .bottom))
-                .overlay(alignment: .top) {  // water surface
-                    Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1.5)
-                }
-                .frame(height: size * CGFloat(0.8 * clamp01(level)))
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
     }
 }
 
@@ -208,17 +230,20 @@ struct GoldieFish: View {
     let t: Double
     let bowl: CGFloat
     var hovering: Bool = false
+    /// Vertical band (offsets from the bowl's center) she stays in: below the surface, above the sand.
+    var swimRange: ClosedRange<CGFloat>? = nil
 
     /// A quick blink every few seconds keeps her alive.
     private var blinking: Bool { t.truncatingRemainder(dividingBy: 4.7) < 0.14 }
 
     var body: some View {
         let m = motion()
+        let y = swimY(m.y)
         FishBody(eyesClosed: mood == .sleeping || blinking, worried: mood == .alarmed || mood == .stressed, t: t)
             .scaleEffect(x: m.facingRight ? 1 : -1, y: 1)
-            .scaleEffect(puff * bowl / 330)
+            .scaleEffect(puff * bowl / 360)
             .rotationEffect(.degrees(m.tilt + (hovering ? sin(t * 14) * 5 : 0)))
-            .offset(x: m.x, y: m.y)
+            .offset(x: m.x, y: y)
     }
 
     private struct Motion {
@@ -226,6 +251,13 @@ struct GoldieFish: View {
         var y: CGFloat
         var facingRight: Bool
         var tilt: Double
+    }
+
+    /// Keep her underwater. Celebrating is the one time she may leap a little above the surface.
+    private func swimY(_ y: CGFloat) -> CGFloat {
+        guard let range = swimRange, range.lowerBound < range.upperBound else { return y }
+        let top = mood == .celebrating ? range.lowerBound - bowl * 0.12 : range.lowerBound
+        return min(max(y, top), range.upperBound)
     }
 
     private func motion() -> Motion {
