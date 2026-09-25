@@ -77,6 +77,8 @@ mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 .build/release/Goldie
 ```
 
+Full install and integration test plan (written for a local agent): [docs/integration-test-plan.md](docs/integration-test-plan.md).
+
 Debug what Goldie sees without the UI: `.build/release/goldiectl snapshot`.
 
 Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
