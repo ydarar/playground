@@ -116,7 +116,12 @@ Hover a tool's icon for its status. The icons are stand-in symbols, not official
 
 Sub-task chats count toward their parent. Why $20: it's 2.5% of an $800 month, about half a working day's share, so 40 such chats use the whole budget. `goldiectl usage` prints your chats' median and p90 spend to help pick your own number. Set it to 0 to turn the cap off.
 
-**Hiding.** The 👁 button in the card (or right-click the bowl) hides her. Show her again from the menu bar.
+**Hiding.** The 👁 button in the card (or right-click the bowl) hides her. To bring her back:
+- the 🐠 menu bar item → Show Goldie (it's put back at every launch and every hide, even if it was ⌘-dragged out);
+- **⌃⌥⌘G** anywhere (toggles her);
+- `goldiectl show`, or just launch Goldie again: the running one comes back instead of a second copy starting.
+
+Can't see the 🐠 in the menu bar? On a MacBook with a notch, a full menu bar hides items behind it; quit a few menu bar apps. On macOS 26, also check System Settings → Menu Bar.
 
 **Suggestions.** The orange number on the bowl counts them:
 - start fresh for heavy chats;

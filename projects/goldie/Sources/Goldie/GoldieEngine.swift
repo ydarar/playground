@@ -519,11 +519,13 @@ final class GoldieEngine: ObservableObject {
     func hide() {
         expanded = false
         setPanelVisible?(false)
-        hiddenHint = "Goldie is hidden. Show her again from here."
+        UserDefaults.standard.set(true, forKey: GoldieIPC.menuBarShownKey)  // the way back must exist
+        hiddenHint = "Goldie is hidden. Show her from here or press ⌃⌥⌘G."
     }
 
     func showGoldie() {
         hiddenHint = nil
+        UserDefaults.standard.set(true, forKey: GoldieIPC.menuBarShownKey)
         setPanelVisible?(true)
     }
 

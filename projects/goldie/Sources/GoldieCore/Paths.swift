@@ -22,3 +22,11 @@ public enum Paths {
 
     public static var cursorHooksFile: URL { home.appendingPathComponent(".cursor/hooks.json") }
 }
+
+/// Talking to a running Goldie from outside (goldiectl, or a second launch).
+public enum GoldieIPC {
+    /// Shows Goldie and her menu bar item.
+    public static let show = Notification.Name("com.goldie.show")
+    /// Menu bar item visibility (forced back on at launch and whenever Goldie hides).
+    public static let menuBarShownKey = "goldie.menuBarShown"
+}

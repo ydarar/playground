@@ -10,6 +10,7 @@ goldiectl: Goldie's command-line helper
   goldiectl install-cursor-hooks    Add Goldie's observe-only hooks to ~/.cursor/hooks.json (keeps yours).
   goldiectl uninstall-cursor-hooks  Remove them.
   goldiectl init-config             Write ~/.config/goldie/config.json with defaults.
+  goldiectl show                    Bring back a hidden Goldie (and her menu bar item).
   goldiectl hook <event>            (Called by Cursor.) Record one hook event.
 """
 
@@ -55,6 +56,10 @@ case "snapshot":
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
     if let data = try? encoder.encode(snap) { print(String(decoding: data, as: UTF8.self)) }
+
+case "show":
+    DistributedNotificationCenter.default().postNotificationName(GoldieIPC.show, object: nil, userInfo: nil, deliverImmediately: true)
+    print("asked Goldie to show herself (if she isn't running, start .build/release/Goldie)")
 
 case "init-config":
     print("config: \(GoldieConfig.writeDefaultIfMissing().path)")

@@ -214,7 +214,7 @@ struct DetailsCard: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("Hide Goldie (show her again from the menu bar)")
+            .help("Hide Goldie (bring her back from the menu bar or with ⌃⌥⌘G)")
             Button {
                 withAnimation(.spring(response: 0.3)) { engine.expanded = false }
             } label: {

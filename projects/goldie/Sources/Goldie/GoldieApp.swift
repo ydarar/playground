@@ -5,9 +5,16 @@ import SwiftUI
 @main
 struct GoldieApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    /// If the item was ⌘-dragged out of the menu bar, macOS would remember that; Goldie puts it
+    /// back at every launch and whenever she hides, so there's always a way to bring her back.
+    @AppStorage(GoldieIPC.menuBarShownKey) private var menuBarShown = true
+
+    init() {
+        UserDefaults.standard.set(true, forKey: GoldieIPC.menuBarShownKey)
+    }
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $menuBarShown) {
             MenuContent(engine: appDelegate.engine, togglePanel: { appDelegate.togglePanel() })
         } label: {
             MenuLabel(engine: appDelegate.engine)
@@ -19,11 +26,29 @@ struct GoldieApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let engine = GoldieEngine()
     private var panel: PanelController?
+    private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Launching Goldie again while she runs just brings the running one back.
+        if Self.anotherInstanceIsRunning() {
+            DistributedNotificationCenter.default().postNotificationName(GoldieIPC.show, object: nil, userInfo: nil, deliverImmediately: true)
+            exit(0)
+        }
         NSApp.setActivationPolicy(.accessory)  // no Dock icon; Goldie lives on the desktop + menu bar
         panel = PanelController(engine: engine)
         engine.start()
+        hotKey = HotKey.controlOptionCommandG { [weak self] in self?.togglePanel() }
+        DistributedNotificationCenter.default().addObserver(forName: GoldieIPC.show, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.engine.showGoldie() }
+        }
+    }
+
+    private static func anotherInstanceIsRunning() -> Bool {
+        guard let me = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return false }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        return NSWorkspace.shared.runningApplications.contains {
+            $0.processIdentifier != pid && $0.executableURL?.resolvingSymlinksInPath() == me
+        }
     }
 
     func togglePanel() { panel?.toggle() }
@@ -55,7 +80,7 @@ struct MenuContent: View {
             if let hint = engine.hiddenHint { Text(hint) }
         }
         Divider()
-        Button(engine.panelVisible ? "Hide Goldie" : "Show Goldie") { togglePanel() }
+        Button((engine.panelVisible ? "Hide Goldie" : "Show Goldie") + "  ⌃⌥⌘G") { togglePanel() }
         Picker("Size", selection: $engine.bowlSize) {
             Text("Small").tag(130.0)
             Text("Medium").tag(170.0)
