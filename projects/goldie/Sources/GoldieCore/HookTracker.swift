@@ -127,7 +127,7 @@ public enum HookRecorder {
         let event = (payload["hook_event_name"] as? String) ?? eventArg ?? "unknown"
         var output = "{}"
         if event == Guards.shellEvent || event == Guards.readEvent {
-            output = #"{"permission":"allow"}"#  // fail open: a Goldie problem must never block your work
+            // Fail open with "no opinion": a Goldie problem must never block (or auto-approve) anything.
             let guards = GoldieConfig.load(from: configURL).guards
             if let decision = Guards.decide(event: event, payload: payload, config: guards, recent: tail(file), now: now) {
                 if let data = try? JSONSerialization.data(withJSONObject: decision.output),

@@ -368,12 +368,13 @@ final class GoldieCoreTests: XCTestCase {
 
         // An edit in between means the agent changed something: not a loop.
         let withEdit = [runs[0], runs[1], ev("afterFileEdit", ["file_path": "a.ts"]), runs[2]]
-        XCTAssertEqual(Guards.decide(event: Guards.shellEvent, payload: payload, config: config, recent: withEdit, now: now)?
-            .output["permission"] as? String, "allow")
+        // "No opinion" is an empty reply, so Cursor's own approval rules still apply.
+        XCTAssertNil(Guards.decide(event: Guards.shellEvent, payload: payload, config: config, recent: withEdit, now: now)?
+            .output["permission"])
 
         // Guard off: always allow.
-        XCTAssertEqual(Guards.decide(event: Guards.shellEvent, payload: payload, config: GuardConfig(), recent: runs, now: now)?
-            .output["permission"] as? String, "allow")
+        XCTAssertNil(Guards.decide(event: Guards.shellEvent, payload: payload, config: GuardConfig(), recent: runs, now: now)?
+            .output["permission"])
     }
 
     func testReadGuardDeniesOnceThenAllowsRetry() throws {
@@ -387,7 +388,8 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(first?.output["permission"] as? String, "deny")
         let denied = try XCTUnwrap(first?.denied)
         let retry = Guards.decide(event: Guards.readEvent, payload: payload, config: config, recent: [denied], now: now)
-        XCTAssertEqual(retry?.output["permission"] as? String, "allow")
+        XCTAssertNotNil(retry)
+        XCTAssertNil(retry?.output["permission"])
     }
 
     func testHandoffWriterSavesInRepoAndExcludesFromGit() throws {
@@ -424,7 +426,7 @@ final class GoldieCoreTests: XCTestCase {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-events-\(UUID()).jsonl")
         let config = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID()).json")
         let reply = HookRecorder.handle(stdin: Data("not json".utf8), eventArg: Guards.shellEvent, file: file, configURL: config, now: now)
-        XCTAssertEqual(reply, #"{"permission":"allow"}"#)
+        XCTAssertEqual(reply, "{}")  // never auto-approves
         XCTAssertEqual(HookRecorder.handle(stdin: Data(), eventArg: "stop", file: file, configURL: config, now: now), "{}")
     }
 }

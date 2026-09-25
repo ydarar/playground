@@ -124,7 +124,8 @@ public enum ModelPolicy {
 }
 
 public struct GuardConfig: Codable, Equatable {
-    /// Block the Nth identical shell command in one task when no file was edited in between.
+    /// Block an identical shell command once it has already run `loopRepeatLimit` times in one task
+    /// with no file edited in between.
     public var loopGuard: Bool = false
     public var loopRepeatLimit: Int = 4
     /// Block reading files bigger than this (the agent may ask again to override).
@@ -134,7 +135,8 @@ public struct GuardConfig: Codable, Equatable {
 }
 
 public struct AutopilotConfig: Codable, Equatable {
-    /// "keystrokes": open a new Cursor chat, paste, send (needs Accessibility permission).
+    /// "keystrokes": open a new Cursor chat with `newChatKeys`, paste, send (needs Accessibility permission).
+    /// "deeplink": open Cursor's prompt deeplink (prefills a new chat; press Enter yourself).
     /// "clipboard": only copy the prompt and bring Cursor forward.
     public var mode: String = "keystrokes"
     /// Press Enter after pasting.

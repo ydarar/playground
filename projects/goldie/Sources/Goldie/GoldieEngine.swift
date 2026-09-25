@@ -241,8 +241,10 @@ final class GoldieEngine: ObservableObject {
         let tip = computeSetupTip(now: now)
         if tip != setupTip { setupTip = tip }
         // Tell the user when a guard just saved a wasted step.
-        for t in snap.threads where t.guardBlocks > (guardBlocksSeen[t.id] ?? 0) {
-            if guardBlocksSeen[t.id] != nil { showToast("🛡 Goldie stopped a wasted step in “\(t.title)”.", seconds: 5) }
+        for t in snap.threads {
+            if let seen = guardBlocksSeen[t.id], t.guardBlocks > seen {
+                showToast("🛡 Goldie stopped a wasted step in “\(t.title)”.", seconds: 5)
+            }
             guardBlocksSeen[t.id] = t.guardBlocks
         }
     }
@@ -365,7 +367,7 @@ final class GoldieEngine: ObservableObject {
         dismissedSuggestions.insert("fresh-\(threadID)")
         speech = nil
         expanded = false
-        let status = await CursorAutopilot.startNewChat(prompt: prompt, config: config.autopilot)
+        let status = await CursorAutopilot.startNewChat(prompt: prompt, workspace: chat?.workspace, config: config.autopilot)
         showToast(status, seconds: 7)
     }
 
@@ -386,9 +388,10 @@ final class GoldieEngine: ObservableObject {
 
     /// Guards are enforced by Cursor's before-* hooks, so turning one on (re)installs hooks.
     func setGuard(loop: Bool? = nil, read: Bool? = nil) {
-        if let loop { config.guards.loopGuard = loop }
-        if let read { config.guards.readGuard = read }
-        config.save()
+        updateConfig { c in
+            if let loop { c.guards.loopGuard = loop }
+            if let read { c.guards.readGuard = read }
+        }
         let names = [config.guards.loopGuard ? "Loop guard" : nil, config.guards.readGuard ? "Big-read guard" : nil].compactMap { $0 }
         if installHooks(quiet: true) {
             showToast(names.isEmpty ? "Guards off." : "\(names.joined(separator: " + ")) on. If it doesn't kick in, restart Cursor.", seconds: 6)
@@ -396,9 +399,16 @@ final class GoldieEngine: ObservableObject {
     }
 
     func setAutoSend(_ on: Bool) {
-        config.autopilot.autoSend = on
-        config.save()
+        updateConfig { $0.autopilot.autoSend = on }
         showToast(on ? "Start fresh will send the new chat for you." : "Start fresh will stop before sending, so you press Enter.")
+    }
+
+    /// Re-read the file, change one thing, save: never clobbers edits made via "Open config".
+    private func updateConfig(_ change: (inout GoldieConfig) -> Void) {
+        var onDisk = GoldieConfig.load()
+        change(&onDisk)
+        onDisk.save()
+        change(&config)
     }
 
     @discardableResult

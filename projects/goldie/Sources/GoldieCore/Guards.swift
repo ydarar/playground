@@ -14,7 +14,9 @@ public enum Guards {
         public var denied: [String: Any]?
     }
 
-    static let allow: [String: Any] = ["permission": "allow"]
+    /// "No opinion": an empty reply, so Cursor's own approval rules still apply.
+    /// (Answering "allow" could auto-approve commands you'd normally confirm.)
+    static let allow: [String: Any] = [:]
 
     public static func decide(event: String, payload: [String: Any], config: GuardConfig,
                               recent: [[String: Any]], now: Date) -> Decision? {

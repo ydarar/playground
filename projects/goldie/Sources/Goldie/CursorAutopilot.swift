@@ -8,14 +8,24 @@ import GoldieCore
 /// Safety: before every keystroke it checks that Cursor is still the frontmost app, and stops if not.
 @MainActor
 enum CursorAutopilot {
-    static func bringCursorForward() {
-        // A background (accessory) app can't pull another app forward with activate() on macOS 14+;
-        // asking the system to open the app works.
-        let running = NSWorkspace.shared.runningApplications.first { $0.localizedName == "Cursor" }
-        guard let url = running?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.todesktop.230313mzl4w4u92") else { return }
+    static var cursorAppURL: URL? {
+        NSWorkspace.shared.runningApplications.first { $0.localizedName == "Cursor" }?.bundleURL
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.todesktop.230313mzl4w4u92")
+    }
+
+    /// Brings Cursor forward. With a workspace, opens that folder in Cursor, which focuses the window
+    /// for that repo (so the new chat lands in the right project when several are open).
+    /// (A background app can't pull another app forward with activate() on macOS 14+; opening works.)
+    static func bringCursorForward(workspace: String? = nil) {
+        guard let app = cursorAppURL else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: nil)
+        if let workspace, FileManager.default.fileExists(atPath: workspace) {
+            NSWorkspace.shared.open([URL(fileURLWithPath: workspace, isDirectory: true)], withApplicationAt: app,
+                                    configuration: configuration, completionHandler: nil)
+        } else {
+            NSWorkspace.shared.openApplication(at: app, configuration: configuration, completionHandler: nil)
+        }
     }
 
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
@@ -31,12 +41,19 @@ enum CursorAutopilot {
     }
 
     /// Returns a short status for a toast.
-    static func startNewChat(prompt: String, config: AutopilotConfig) async -> String {
+    static func startNewChat(prompt: String, workspace: String?, config: AutopilotConfig) async -> String {
+        if config.mode == "deeplink", let url = deeplink(prompt) {
+            bringCursorForward(workspace: workspace)
+            await pause(0.8)
+            NSWorkspace.shared.open(url)
+            return "Opened a new Cursor chat with the handoff. Press Enter to send."
+        }
+
         let pasteboard = NSPasteboard.general
-        let previous = pasteboard.string(forType: .string)
+        let previous = saveClipboard(pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(prompt, forType: .string)
-        bringCursorForward()
+        bringCursorForward(workspace: workspace)
 
         guard config.mode == "keystrokes" else {
             return "Handoff copied. In Cursor, open a new chat and paste (⌘V)."
@@ -63,12 +80,43 @@ enum CursorAutopilot {
             press("return")
             sent = true
         }
-        if config.restoreClipboard, let previous {
+        if config.restoreClipboard, !previous.isEmpty {
             await pause(1.5)
-            pasteboard.clearContents()
-            pasteboard.setString(previous, forType: .string)
+            // Only if you haven't copied something new in the meantime.
+            if pasteboard.string(forType: .string) == prompt { restoreClipboard(previous, to: pasteboard) }
         }
         return sent ? "Fresh chat started in Cursor 🐠" : "Fresh chat is ready in Cursor. Press Enter to send."
+    }
+
+    /// Cursor's prompt deeplink: opens a new chat prefilled with the text.
+    static func deeplink(_ prompt: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = "cursor"
+        components.host = "anysphere.cursor-deeplink"
+        components.path = "/prompt"
+        components.queryItems = [URLQueryItem(name: "text", value: prompt)]
+        return components.url
+    }
+
+    /// Every item and every type (text, images, files), so nothing on your clipboard is lost.
+    private static func saveClipboard(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
+        (pasteboard.pasteboardItems ?? []).map { item -> [NSPasteboard.PasteboardType: Data] in
+            var byType: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) { byType[type] = data }
+            }
+            return byType
+        }
+    }
+
+    private static func restoreClipboard(_ saved: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let items = saved.map { byType -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in byType { item.setData(data, forType: type) }
+            return item
+        }
+        pasteboard.writeObjects(items)
     }
 
     private static func pause(_ seconds: Double) async {
