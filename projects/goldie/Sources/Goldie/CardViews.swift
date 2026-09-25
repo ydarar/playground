@@ -457,7 +457,7 @@ struct ThreadRow: View {
     /// "debugging · grok-4.7 · spent $4.10 · last task $1.40 · ~$0.12/step"
     private var metaLine: String {
         var parts: [String] = []
-        if let kind = thread.currentKind { parts.append(kind.rawValue) }
+        if let kind = thread.dominantKind { parts.append(kind.rawValue) }
         parts.append(thread.model ?? "unknown model")
         if thread.maxMode { parts.append("Max Mode") }
         if let spent = thread.spentUSD { parts.append("spent \(Fmt.usd(spent))") }
