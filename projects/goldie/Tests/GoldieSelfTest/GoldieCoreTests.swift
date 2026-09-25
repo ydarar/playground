@@ -1,4 +1,5 @@
-import XCTest
+import Foundation
+// Runs under goldie-selftest (Shim.swift provides XCTest-style assertions; no Xcode needed).
 @testable import GoldieCore
 
 final class GoldieCoreTests: XCTestCase {
