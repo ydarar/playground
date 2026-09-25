@@ -25,8 +25,21 @@ public struct UsageEvent: Codable, Hashable {
 public struct UsageLedger {
     public private(set) var events: [UsageEvent] = []
     public private(set) var lastMergeAt: Date?
+    /// Set when a fetch hit the page cap: charges from the month start up to this date are still
+    /// missing, so the next fetch goes back for them before totals are trusted.
+    public private(set) var backfillUntil: Date?
 
     public init() {}
+
+    /// Records how a fetch went. `since` is where it started; an incomplete fetch holds only its
+    /// newest events, so everything older than its oldest event still needs fetching.
+    public mutating func noteFetch(since: Date, events: [UsageEvent], complete: Bool, now: Date) {
+        if complete {
+            if since <= Self.monthStart(now) { backfillUntil = nil }
+        } else if let oldest = events.map(\.at).min() {
+            backfillUntil = min(backfillUntil ?? oldest, oldest)
+        }
+    }
 
     public var isEmpty: Bool { lastMergeAt == nil }
 
@@ -47,7 +60,7 @@ public struct UsageLedger {
     /// Re-fetch a little overlap so late-arriving events aren't missed; duplicates merge away.
     public func fetchStart(now: Date) -> Date {
         let monthStart = Self.monthStart(now)
-        guard lastMergeAt != nil, let last = events.last else { return monthStart }
+        guard lastMergeAt != nil, backfillUntil == nil, let last = events.last else { return monthStart }
         return max(monthStart, last.at.addingTimeInterval(-15 * 60))
     }
 
@@ -130,9 +143,10 @@ public final class CursorUsageClient {
         for page in 1...maxPages {
             let (status, body) = try await fetchPage(since: since, until: until, page: page, pageSize: pageSize)
             guard status == 200, let body else { throw GoldieError("Cursor usage API returned HTTP \(status)") }
-            let events = Self.parseEvents(body)
-            all += events
-            if events.count < pageSize { return (all, true) }
+            all += Self.parseEvents(body)
+            // Stop on the raw page size: one unparseable event mustn't end paging early.
+            let raw = ((body["usageEventsDisplay"] as? [Any]) ?? (body["usageEvents"] as? [Any]))?.count ?? 0
+            if raw < pageSize { return (all, true) }
         }
         return (all, false)
     }
@@ -146,7 +160,8 @@ public final class CursorUsageClient {
             // cursor.com Usage total within 0.2% in testing; the list price `totalCents` was ~7% high.
             let listCents = J.number(usage["totalCents"]) ?? J.number(e["totalCents"]) ?? dollars(e["usageBasedCosts"]).map { $0 * 100 } ?? 0
             let discount = J.number(usage["enterpriseUsageDiscountPercent"]) ?? 0
-            let cents = J.number(e["chargedCents"]) ?? listCents * (1 - discount / 100)
+            let chargeable = (e["isChargeable"] as? Bool) ?? true
+            let cents = J.number(e["chargedCents"]) ?? (chargeable ? listCents * (1 - discount / 100) : 0)
             var event = UsageEvent(
                 at: at,
                 model: (e["model"] as? String) ?? "unknown",
@@ -157,7 +172,7 @@ public final class CursorUsageClient {
                 cacheWriteTokens: J.int(usage["cacheWriteTokens"]) ?? 0
             )
             event.conversationId = e["conversationId"] as? String
-            event.chargeable = (e["isChargeable"] as? Bool) ?? true
+            event.chargeable = chargeable
             event.chargedCents = J.number(e["chargedCents"])
             event.discountPercent = J.number(usage["enterpriseUsageDiscountPercent"])
             event.listCents = listCents
@@ -174,7 +189,9 @@ public final class CursorUsageClient {
 
 /// Puts real money on each thread by matching usage events to thread activity in time.
 public enum CostModel {
-    public static func enrich(_ snap: Snapshot, ledger: UsageLedger, config: GoldieConfig, now: Date) -> Snapshot {
+    /// `parents` (sub-task chat → parent) adds roll-ups the live threads' own lists don't know, e.g. nested sub-tasks.
+    public static func enrich(_ snap: Snapshot, ledger: UsageLedger, config: GoldieConfig, now: Date,
+                              parents: [String: String] = [:]) -> Snapshot {
         var out = snap
         guard !ledger.isEmpty else { return out }
         out.todayUSD = ledger.totalUSD(since: Calendar.current.startOfDay(for: now))
@@ -188,10 +205,12 @@ public enum CostModel {
         // Events Cursor tied to a chat always count, however old, so `spentUSD` is the chat's whole
         // month. Untied events are matched by time, so only those near recent activity are candidates.
         let earliest = snap.threads.compactMap { $0.activityTimes.first }.min() ?? now
+        let monthStart = UsageLedger.monthStart(now)
         let candidates = ledger.events.filter {
-            !($0.conversationId ?? "").isEmpty || $0.at >= earliest.addingTimeInterval(-config.attributionToleranceSeconds)
+            $0.at >= monthStart
+                && (!($0.conversationId ?? "").isEmpty || $0.at >= earliest.addingTimeInterval(-config.attributionToleranceSeconds))
         }
-        let assigned = attribute(candidates, to: snap.threads, tolerance: config.attributionToleranceSeconds)
+        let assigned = attribute(candidates, to: snap.threads, tolerance: config.attributionToleranceSeconds, parents: parents)
         let rates = ledger.centsPerToken(now: now)
 
         for i in out.threads.indices {
@@ -203,20 +222,25 @@ public enum CostModel {
                     t.lastMessageUSD = events.filter { $0.at >= lastUser }.reduce(0) { $0 + $1.cents } / 100
                 }
                 // Price each task: the charges between its start and the next task's start.
+                // The chat's own calls (not its sub-tasks') say what one step costs and which model it runs.
+                let own = events.filter { $0.conversationId == t.id }
+                let ownOrAll = own.isEmpty ? events : own
                 for j in t.tasks.indices {
+                    // Same 5 s slack on both edges, so a charge just before the next message is priced once.
                     let start = t.tasks[j].start.addingTimeInterval(-5)
-                    let end = j + 1 < t.tasks.count ? t.tasks[j + 1].start : Date.distantFuture
+                    let end = j + 1 < t.tasks.count ? t.tasks[j + 1].start.addingTimeInterval(-5) : Date.distantFuture
                     let inTask = events.filter { $0.at >= start && $0.at < end }
                     if !inTask.isEmpty {
                         t.tasks[j].costUSD = inTask.reduce(0) { $0 + $1.cents } / 100
                         t.tasks[j].steps = max(t.tasks[j].steps, inTask.count)
                         // The billed model is more precise than the chat's setting (e.g. reasoning effort).
-                        if let billed = dominantModel(inTask) { t.tasks[j].model = billed }
+                        let ownInTask = inTask.filter { $0.conversationId == t.id }
+                        if let billed = dominantModel(ownInTask.isEmpty ? inTask : ownInTask) { t.tasks[j].model = billed }
                     }
                 }
                 if let lastTask = t.tasks.last?.costUSD { t.lastMessageUSD = lastTask }
-                t.billedModel = events.last?.model
-                let recent = events.suffix(3)
+                t.billedModel = ownOrAll.last?.model
+                let recent = ownOrAll.suffix(3)
                 t.nextTurnCostUSD = recent.reduce(0) { $0 + $1.cents } / Double(recent.count) / 100
                 t.costSource = "cursor"
             } else if t.contextTokens > 0, let rate = rate(for: t.model, in: rates) {
@@ -230,19 +254,24 @@ public enum CostModel {
 
     /// Exact when Cursor says which chat a request belonged to (`conversationId`); otherwise the
     /// thread with the nearest activity timestamp (within tolerance).
-    static func attribute(_ events: [UsageEvent], to threads: [ThreadSnapshot], tolerance: Double) -> [String: [UsageEvent]] {
+    static func attribute(_ events: [UsageEvent], to threads: [ThreadSnapshot], tolerance: Double,
+                          parents: [String: String] = [:]) -> [String: [UsageEvent]] {
         var out: [String: [UsageEvent]] = [:]
-        // A chat owns its own requests and those of the sub-task chats it spawned.
+        // A chat owns its own requests and those of the sub-task chats it spawned. Chats first, then
+        // sub-tasks, so a sub-task that also shows up as a chat can't take its parent's place.
         var owner: [String: String] = [:]
-        for t in threads {
-            owner[t.id] = t.id
-            for sub in t.subagentIds { owner[sub] = t.id }
-        }
+        for t in threads { owner[t.id] = t.id }
+        for t in threads { for sub in t.subagentIds where sub != t.id { owner[sub] = t.id } }
+        // When Cursor tags chat requests with their chat, an untagged charge isn't a chat request
+        // (inline edits, commit messages…): don't pin it on whichever chat was busy at the time.
+        let tagged = events.filter { !($0.conversationId ?? "").isEmpty }.count
+        let matchByTime = tagged * 2 < events.count
         for e in events {
             if let conversation = e.conversationId, !conversation.isEmpty {
-                if let chat = owner[conversation] { out[chat, default: []].append(e) }
+                if let chat = ChatCap.root(of: conversation, parents: parents, stopAt: owner) { out[chat, default: []].append(e) }
                 continue  // belongs to a chat Goldie isn't watching: never guess by time
             }
+            guard matchByTime else { continue }
             var best: (id: String, distance: Double)?
             for t in threads {
                 guard let d = nearestDistance(e.at, in: t.activityTimes), d <= tolerance else { continue }
@@ -277,9 +306,10 @@ public enum CostModel {
         let name = (model ?? "").lowercased()
         if !name.isEmpty {
             if let exact = rates[name] { return exact }
-            if let fuzzy = rates.first(where: { $0.key != "*" && ($0.key.contains(name) || name.contains($0.key)) }) {
-                return fuzzy.value
-            }
+            // Closest name wins (longest key, then alphabetical), never dictionary order.
+            let fuzzy = rates.filter { $0.key != "*" && ($0.key.contains(name) || name.contains($0.key)) }
+                .min { $0.key.count != $1.key.count ? $0.key.count > $1.key.count : $0.key < $1.key }
+            if let fuzzy { return fuzzy.value }
         }
         return rates["*"]
     }

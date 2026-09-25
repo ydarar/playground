@@ -44,6 +44,9 @@ public final class SnapshotCollector {
             let snap = Signals.build(id: id, thread: thread, hook: hook, config: config, now: now)
             if now.timeIntervalSince(snap.lastActivity) <= window { threads.append(snap) }
         }
+        // A sub-task chat the headers didn't flag yet (or older Cursor) belongs under its parent, not beside it.
+        let children = Set(threads.flatMap { t in t.subagentIds.filter { $0 != t.id } })
+        threads.removeAll { children.contains($0.id) }
         threads.sort { $0.lastActivity > $1.lastActivity }
         threads.forEach(baseline.observe)
         baseline.saveIfNeeded()

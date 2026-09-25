@@ -604,5 +604,85 @@ final class GoldieCoreTests: XCTestCase {
         let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
         XCTAssertEqual(t.spentUSD ?? 0, 10, accuracy: 0.001)
     }
+    private func tied(_ id: String, _ ago: Double, cents: Double, model: String = "grok-4.7") -> UsageEvent {
+        var e = event(now.addingTimeInterval(-ago), cents: cents, model: model)
+        e.conversationId = id
+        return e
+    }
+
+    private func task(_ id: String, startAgo: Double) -> TaskSegment {
+        TaskSegment(threadID: id, model: "grok-4.7", kind: .debugging, start: now.addingTimeInterval(-startAgo),
+                    end: now.addingTimeInterval(-startAgo + 50), steps: 1, maxRepeat: 0, complete: true, reasked: false, costUSD: nil)
+    }
+
+    func testChargeAtTaskBoundaryIsPricedOnce() {
+        var a = thread("a", ratio: 2)
+        a.tasks = [task("a", startAgo: 200), task("a", startAgo: 100)]
+        var ledger = UsageLedger()
+        ledger.merge([tied("a", 150, cents: 10), tied("a", 103, cents: 20), tied("a", 50, cents: 40)], now: now)
+        let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        let taskSum = t.tasks.compactMap(\.costUSD).reduce(0, +)
+        XCTAssertEqual(taskSum, t.spentUSD ?? 0, accuracy: 0.0001)  // no charge counted in two tasks
+        XCTAssertEqual(t.tasks[1].costUSD ?? 0, 0.60, accuracy: 0.0001)  // 3 s before the message: skew, goes with it
+    }
+
+    func testStepCostAndModelIgnoreSubTaskCalls() {
+        var p = thread("p", ratio: 5)
+        p.subagentIds = ["s"]
+        var ledger = UsageLedger()
+        ledger.merge([tied("p", 100, cents: 30, model: "big"), tied("s", 50, cents: 2, model: "small"),
+                      tied("s", 40, cents: 2, model: "small"), tied("s", 30, cents: 2, model: "small")], now: now)
+        let t = CostModel.enrich(snapshot([p]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.spentUSD ?? 0, 0.36, accuracy: 0.0001)  // sub-task $ still rolls up
+        XCTAssertEqual(t.nextTurnCostUSD ?? 0, 0.30, accuracy: 0.0001)  // but a step is the parent's step
+        XCTAssertEqual(t.billedModel, "big")
+    }
+
+    func testUntaggedChargesAreNotGuessedWhenCursorTagsChats() {
+        var a = thread("a", ratio: 2)
+        a.activityTimes = [now.addingTimeInterval(-60)]
+        var ledger = UsageLedger()
+        ledger.merge([tied("a", 70, cents: 10), tied("a", 65, cents: 10),
+                      event(now.addingTimeInterval(-61), cents: 50)], now: now)  // e.g. an inline edit, untagged
+        let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.spentUSD ?? 0, 0.20, accuracy: 0.0001)
+    }
+
+    func testLedgerBackfillsAfterHittingThePageCap() {
+        let start = UsageLedger.monthStart(now)
+        let newest = [event(now.addingTimeInterval(-100), cents: 1), event(now.addingTimeInterval(-50), cents: 1)]
+        var ledger = UsageLedger()
+        ledger.merge(newest, now: now)
+        ledger.noteFetch(since: start, events: newest, complete: false, now: now)
+        XCTAssertEqual(ledger.backfillUntil, now.addingTimeInterval(-100))
+        XCTAssertEqual(ledger.fetchStart(now: now), start)  // go back to the month start, not forward
+        ledger.noteFetch(since: start, events: [event(now.addingTimeInterval(-9000), cents: 1)], complete: true, now: now)
+        XCTAssertNil(ledger.backfillUntil)
+    }
+
+    func testNonChargeableEventWithoutChargedCentsCostsNothing() {
+        let body: [String: Any] = ["usageEventsDisplay": [
+            ["timestamp": "1800000000000", "model": "grok-4.7", "isChargeable": false,
+             "tokenUsage": ["totalCents": 12]] as [String: Any],
+        ]]
+        XCTAssertEqual(CursorUsageClient.parseEvents(body)[0].cents, 0)
+    }
+
+    func testNestedSubTasksRollUpToTheTopChat() {
+        let totals = ChatCap.totals([tied("grandchild", 30, cents: 500), tied("top", 20, cents: 100)],
+                                    parents: ["grandchild": "child", "child": "top"])
+        XCTAssertEqual(totals["top"]?.usd ?? 0, 6, accuracy: 0.0001)
+        XCTAssertNil(totals["grandchild"])
+    }
+
+    func testSubTaskListedAsAChatStillCountsForItsParent() {
+        var parent = thread("p", ratio: 2)
+        parent.subagentIds = ["s"]
+        let sub = thread("s", ratio: 1)
+        var ledger = UsageLedger()
+        ledger.merge([tied("s", 30, cents: 40)], now: now)
+        let s = CostModel.enrich(snapshot([sub, parent]), ledger: ledger, config: GoldieConfig(), now: now)
+        XCTAssertEqual(s.thread("p")?.spentUSD ?? 0, 0.40, accuracy: 0.0001)
+    }
 }
 #endif

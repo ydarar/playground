@@ -48,6 +48,13 @@ let tests: [(String, () throws -> Void)] = [
     ("testClaudeLifetimeSpendBecomesMonthToDate", suite.testClaudeLifetimeSpendBecomesMonthToDate),
     ("testChatCapListsOpenAndClosedChatsWithSubagentsRolledUp", suite.testChatCapListsOpenAndClosedChatsWithSubagentsRolledUp),
     ("testSpentIncludesTheChatsOlderChargesNotJustRecentActivity", suite.testSpentIncludesTheChatsOlderChargesNotJustRecentActivity),
+    ("testChargeAtTaskBoundaryIsPricedOnce", suite.testChargeAtTaskBoundaryIsPricedOnce),
+    ("testStepCostAndModelIgnoreSubTaskCalls", suite.testStepCostAndModelIgnoreSubTaskCalls),
+    ("testUntaggedChargesAreNotGuessedWhenCursorTagsChats", suite.testUntaggedChargesAreNotGuessedWhenCursorTagsChats),
+    ("testLedgerBackfillsAfterHittingThePageCap", suite.testLedgerBackfillsAfterHittingThePageCap),
+    ("testNonChargeableEventWithoutChargedCentsCostsNothing", suite.testNonChargeableEventWithoutChargedCentsCostsNothing),
+    ("testNestedSubTasksRollUpToTheTopChat", suite.testNestedSubTasksRollUpToTheTopChat),
+    ("testSubTaskListedAsAChatStillCountsForItsParent", suite.testSubTaskListedAsAChatStillCountsForItsParent),
 ]
 
 var failedTests = 0

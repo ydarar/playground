@@ -51,9 +51,9 @@ Cursor state.vscdb (read-only) ────────────────�
 | Orange number on the bowl | Goldie has suggestions. Click her → **Goldie's suggestions**, each with its own button |
 | Goldie looks stressed but says nothing | No single chat is to blame, but the month is on pace to go over budget |
 | Hover Goldie | Quick peek: mood and today's $ |
-| Click Goldie (or her speech bubble) | Details: budget bar, Goldie's verdict with **Start fresh**, chats sorted by what needs you, setup checklist if something's missing |
+| Click Goldie (or her speech bubble) | Details: budget bar, chats sorted by what needs you, chats over the cap, setup checklist if something's missing. ⓘ in its header explains every number |
 | Drag Goldie | Moves her. She remembers the spot. Menu bar → Size for Small / Medium / Large |
-| Menu bar `🐠 $3.20 •` | Today's spend; the dot means Goldie has a suggestion |
+| Menu bar `🐠 $3.20 •` | Today's spend; the dot means Goldie has a suggestion. **Model scorecard** (cost per task that worked, by model and kind of work) is in this menu |
 
 ## Run it
 

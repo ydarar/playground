@@ -38,11 +38,33 @@ public enum ChatCap {
         var out: [String: (usd: Double, lastAt: Date)] = [:]
         for e in events {
             guard let conversation = e.conversationId, !conversation.isEmpty else { continue }
-            let chat = parents[conversation] ?? conversation
+            let chat = top(of: conversation, parents: parents)
             let prior = out[chat] ?? (usd: 0, lastAt: e.at)
             out[chat] = (usd: prior.usd + e.cents / 100, lastAt: max(prior.lastAt, e.at))
         }
         return out
+    }
+
+    /// The top-level chat an id belongs to, following sub-task links (sub-tasks can spawn sub-tasks).
+    static func top(of id: String, parents: [String: String]) -> String {
+        var current = id
+        for _ in 0..<8 {
+            guard let up = parents[current], up != current else { break }
+            current = up
+        }
+        return current
+    }
+
+    /// The watched chat an id rolls up to: itself or its nearest ancestor that `owner` knows
+    /// (id → owning chat). nil when none of them is watched.
+    static func root(of id: String, parents: [String: String], stopAt owner: [String: String]) -> String? {
+        var current = id
+        for _ in 0..<8 {
+            if let chat = owner[current] { return chat }
+            guard let up = parents[current], up != current else { return nil }
+            current = up
+        }
+        return nil
     }
 
     /// Sub-task chat → parent, from chat info plus the live threads' own lists.
@@ -72,7 +94,7 @@ public enum ChatCap {
     /// For `goldiectl usage`: how chat costs are spread this month, to pick a sensible cap.
     /// Chat ids and titles are never printed.
     static func distribution(_ events: [UsageEvent], cap: Double) -> [String] {
-        let chats = totals(events, parents: [:]).values.map(\.usd).sorted()
+        let chats = totals(events, parents: [:]).values.map { $0.usd }.sorted()
         guard !chats.isEmpty else { return ["", "# Per-chat spend: no events tied to a chat yet"] }
         func pct(_ p: Double) -> Double { chats[min(chats.count - 1, Int(Double(chats.count - 1) * p))] }
         func usd(_ v: Double) -> String { String(format: "$%.2f", v) }

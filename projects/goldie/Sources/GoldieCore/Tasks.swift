@@ -66,9 +66,10 @@ enum TaskSegmenter {
         var out: [TaskSegment] = []
         for (n, ui) in userIndices.enumerated() {
             let user = bubbles[ui]
-            guard let start = user.createdAt else { continue }
             let nextUser = n + 1 < userIndices.count ? userIndices[n + 1] : bubbles.count
             let work = bubbles[(ui + 1)..<nextUser]
+            // No timestamp on the message: its first reply's is close enough, so tasks don't merge.
+            guard let start = user.createdAt ?? work.compactMap(\.createdAt).min() else { continue }
 
             var edits = 0
             var commands = 0

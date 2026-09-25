@@ -179,15 +179,14 @@ struct DetailsCard: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if showLegend { Legend() }
             if engine.needsSetup { SetupChecklist(engine: engine) }
             BudgetSection(snapshot: engine.snapshot, sources: engine.sources, budget: engine.config.monthlyBudgetUSD)
-            goldieSays
             if !engine.suggestions.isEmpty { SuggestionsSection(engine: engine) }
             threadList
             if !engine.snapshot.overCapChats.isEmpty { OverCapSection(engine: engine) }
             TipsSection(engine: engine)
             footer
-            if showLegend { Legend() }
         }
     }
 
@@ -202,6 +201,14 @@ struct DetailsCard: View {
             Text(engine.brainStatus == "local LLM" ? "local AI" : "rules")
                 .font(.caption2).foregroundStyle(.secondary)
                 .help("Who's judging: \(engine.brainStatus)")
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showLegend.toggle() }
+            } label: {
+                Image(systemName: showLegend ? "info.circle.fill" : "info.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(showLegend ? Color.accentColor : Color.secondary)
+            .help(showLegend ? "Hide explanations" : "What do these mean?")
             Button { engine.hide() } label: {
                 Image(systemName: "eye.slash")
             }
@@ -217,37 +224,6 @@ struct DetailsCard: View {
             .foregroundStyle(.secondary)
             .help("Close")
         }
-    }
-
-    /// Goldie's verdict in one sentence, plus a handoff for a chat you selected.
-    private var goldieSays: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("🐠")
-            VStack(alignment: .leading, spacing: 8) {
-                Text(engine.verdict.reason)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let selected = engine.selectedThread, let chat = engine.snapshot.thread(selected) {
-                    HStack(spacing: 10) {
-                        Text("Selected: “\(chat.title)”").font(.caption.weight(.semibold)).lineLimit(1)
-                        Spacer()
-                        Button("Copy handoff") { engine.startFresh(threadID: selected) }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .tint(.orange)
-                    }
-                }
-                if engine.verdict.targetThread != nil || engine.verdict.mood == .alarmed {
-                    Button("Not helpful") { engine.notHelpful() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(engine.verdict.mood.color.opacity(0.12)))
     }
 
     private var sortedThreads: [ThreadSnapshot] {
@@ -282,16 +258,9 @@ struct DetailsCard: View {
     }
 
     private var footer: some View {
-        HStack {
-            Text("\(engine.snapshot.threads.count) chat(s) · updates every \(Int(engine.config.pollSeconds))s")
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button(showLegend ? "Hide explanations" : "What do these mean?") {
-                withAnimation(.easeInOut(duration: 0.2)) { showLegend.toggle() }
-            }
-            .buttonStyle(.borderless)
-        }
-        .font(.caption)
+        Text("\(engine.snapshot.threads.count) chat(s) · updates every \(Int(engine.config.pollSeconds))s")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -614,6 +583,14 @@ struct ThreadRow: View {
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
+            if isTarget {
+                Spacer()
+                Button("Not helpful") { engine.notHelpful() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Goldie backs off this chat for a while")
+            }
         }
     }
 
@@ -665,7 +642,7 @@ struct Legend: View {
             item("Re-read/step bar", "The agent re-sends the whole chat on every step, so long chats pay for their history again and again. Full bar = time to start fresh.")
             item("A new chat would be ~N× cheaper", "Compared with a fresh chat that starts from a short handoff (~15k tokens).")
             item("Spent · last task · per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. A task is one message plus everything the agent did for it. \"est.\" = estimated from tokens.")
-            item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side.")
+            item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side. The full table is in the menu bar → Model scorecard.")
             item("📄 Big reads", "One huge file or log in a chat is re-sent on every later step. Asking for just the lines you need keeps chats light.")
             item("AI Token Budget", "Month spend across Cursor, Claude, Codex and OpenCode vs your budget, colored by tool (hover an icon for its status). The tick shows where even spending would put you today. Goldie's water drains as you spend.")
             item("When to start fresh", "At a task boundary: the chat is heavy and waiting for you (✨). Mid-task (⏳), let it finish, because a new chat would re-pay to rediscover everything. Idle chats (💤) cost nothing. Stuck chats (↩︎) usually need a redirect, not a new chat.")
@@ -688,62 +665,45 @@ struct Legend: View {
     }
 }
 
-/// Account-wide tips and the model scorecard (your cost per finished task, by kind of work).
+/// Account-wide tip about what every chat starts with. (The model scorecard lives in the menu bar.)
 struct TipsSection: View {
     @ObservedObject var engine: GoldieEngine
-    @State private var showScorecard = false
 
     var body: some View {
-        if engine.setupTip != nil || !engine.modelStats.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                if let tip = engine.setupTip {
-                    Text("⚙︎ " + tip).font(.caption).fixedSize(horizontal: false, vertical: true)
-                }
-                if !engine.modelStats.isEmpty {
-                    Button(showScorecard ? "Hide model scorecard" : "Model scorecard: what each model costs you per task") {
-                        withAnimation(.easeInOut(duration: 0.2)) { showScorecard.toggle() }
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
-                    if showScorecard { ModelScorecard(stats: engine.modelStats) }
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
+        if let tip = engine.setupTip {
+            Text("⚙︎ " + tip).font(.caption).fixedSize(horizontal: false, vertical: true)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
         }
     }
 }
 
-struct ModelScorecard: View {
+/// Menu bar → Model scorecard: what each model costs you per task that worked, by kind of work.
+struct ModelScorecardMenu: View {
     let stats: [ModelStats]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(TaskKind.allCases, id: \.self) { kind in
-                let rows = stats.filter { $0.kind == kind }.sorted { $0.costPerGoodTaskUSD < $1.costPerGoodTaskUSD }
-                if !rows.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(kind.label).font(.caption.weight(.semibold))
-                        ForEach(rows, id: \.model) { row in
-                            Text(line(row, best: row.model == rows.first?.model && rows.count > 1))
-                                .font(.caption2)
-                                .foregroundStyle(row.count >= ModelFit.minTasks ? Color.primary : Color.secondary)
-                        }
+        ForEach(TaskKind.allCases, id: \.self) { kind in
+            let rows = stats.filter { $0.kind == kind }.sorted { $0.costPerGoodTaskUSD < $1.costPerGoodTaskUSD }
+            if !rows.isEmpty {
+                Section(kind.label) {
+                    ForEach(rows, id: \.model) { row in
+                        Text(Self.line(row, best: row.model == rows.first?.model && rows.count > 1))
                     }
                 }
             }
-            Text("Cost per task that worked = median task cost, adjusted for tasks that looped or needed redoing. Greyed rows have under \(ModelFit.minTasks) tasks.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
+        Divider()
+        Text("Median cost per task, adjusted for tasks that looped or were redone.")
+        Text("✓ = cheapest with \(ModelFit.minTasks)+ tasks. Fewer tasks: not enough evidence yet.")
     }
 
-    private func line(_ s: ModelStats, best: Bool) -> String {
-        let mark = best && s.count >= ModelFit.minTasks ? "✓ " : "   "
+    static func line(_ s: ModelStats, best: Bool) -> String {
+        let mark = best && s.count >= ModelFit.minTasks ? "✓ " : ""
+        let few = s.count < ModelFit.minTasks ? " (few tasks)" : ""
         return mark + String(format: "%@: $%.2f/task · %ld tasks · %.0f%% redone · ~%ld steps",
-                             s.model, s.costPerGoodTaskUSD, s.count, s.troubleRate * 100, s.medianSteps)
+                             s.model, s.costPerGoodTaskUSD, s.count, s.troubleRate * 100, s.medianSteps) + few
     }
 }
 

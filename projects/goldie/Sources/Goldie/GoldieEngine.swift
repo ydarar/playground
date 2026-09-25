@@ -84,7 +84,7 @@ final class GoldieEngine: ObservableObject {
     private var lastUsageAt = Date.distantPast
     /// Names and sub-task chats for every chat seen in usage (for the over-cap list); ids tried once.
     private var chatInfo: [String: ChatInfo] = [:]
-    private var chatInfoTried: Set<String> = []
+    private var chatInfoReadAt: [String: Date] = [:]
     private var chatInfoInFlight = false
     /// Each live chat's spend last time, so Goldie speaks once, when a chat crosses the cap.
     private var lastSpent: [String: Double] = [:]
@@ -249,10 +249,20 @@ final class GoldieEngine: ObservableObject {
     /// Looks up names (and sub-task chats) for chats seen in usage, once each, off the main thread.
     private func refreshChatInfo() {
         guard config.chatCapUSD > 0, !chatInfoInFlight else { return }
-        let ids = Array(Set(ledger.events.compactMap(\.conversationId)).subtracting(chatInfoTried).filter { !$0.isEmpty })
+        // New chats, plus chats charged since we last read them (they may have spawned sub-tasks since).
+        var lastCharge: [String: Date] = [:]
+        for e in ledger.events {
+            guard let id = e.conversationId, !id.isEmpty else { continue }
+            lastCharge[id] = max(lastCharge[id] ?? e.at, e.at)
+        }
+        let ids = lastCharge.compactMap { id, at -> String? in
+            guard let read = chatInfoReadAt[id] else { return id }
+            return at > read ? id : nil
+        }
         guard !ids.isEmpty else { return }
         chatInfoInFlight = true
-        chatInfoTried.formUnion(ids)
+        let readAt = Date()
+        for id in ids { chatInfoReadAt[id] = readAt }
         let collector = self.collector
         queue.async {
             let found = collector.chatInfo(ids: ids)
@@ -272,13 +282,18 @@ final class GoldieEngine: ObservableObject {
               now.timeIntervalSince(lastUsageAt) >= config.usageRefreshMinutes * 60 else { return }
         usageInFlight = true
         lastUsageAt = now
+        // After a fetch that hit the page cap, go back for the older charges before fetching new ones.
+        let backfill = ledger.backfillUntil
         let from = ledger.fetchStart(now: now)
+        let until = backfill ?? now
         Task { @MainActor [weak self] in
             do {
-                let (events, complete) = try await client.fetchAll(since: from, until: Date())
+                let (events, complete) = try await client.fetchAll(since: from, until: until)
                 guard let self else { return }
                 self.ledger.merge(events, now: Date())
-                self.usageStatus = complete ? "connected" : "connected (month total incomplete: too many events)"
+                self.ledger.noteFetch(since: from, events: events, complete: complete, now: Date())
+                self.usageStatus = self.ledger.backfillUntil == nil ? "connected" : "connected (still loading older charges; month total is low)"
+                if self.ledger.backfillUntil != nil { self.lastUsageAt = .distantPast }  // keep going until the month is complete
                 if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
                 self.refreshChatInfo()
             } catch {
@@ -291,7 +306,8 @@ final class GoldieEngine: ObservableObject {
     private func apply(_ raw: Snapshot) {
         let now = Date()
         rawSnapshot = raw
-        var snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
+        var snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now,
+                                    parents: ChatCap.parents(info: chatInfo, threads: raw.threads))
         // One budget for every AI tool: Cursor (live) + Claude (gateway) + Codex/OpenCode (manual for now).
         snap.otherSourcesMonthUSD = (claudeMonthUSD ?? 0) + (config.sources.codexMonthUSD ?? 0) + (config.sources.opencodeMonthUSD ?? 0)
         snap.otherSourcesConnected = claudeMonthUSD != nil || config.sources.codexMonthUSD != nil || config.sources.opencodeMonthUSD != nil
