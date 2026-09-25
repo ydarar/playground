@@ -46,7 +46,7 @@ struct GoldieRootView: View {
                         withAnimation(.spring(response: 0.3)) { engine.expanded.toggle() }
                     }
                     .onHover { hovering = $0 }
-                    .contextMenu { HideMenuItems(engine: engine) }
+                    .contextMenu { Button("Hide Goldie") { engine.hide() } }
                     .help(engine.suggestions.isEmpty ? "Click for details · drag to move" : "Goldie has suggestions: click to see them")
             }
         }
@@ -180,7 +180,7 @@ struct DetailsCard: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             if engine.needsSetup { SetupChecklist(engine: engine) }
-            BudgetSection(snapshot: engine.snapshot, budget: engine.config.monthlyBudgetUSD, usageStatus: engine.usageStatus)
+            BudgetSection(snapshot: engine.snapshot, sources: engine.sources, budget: engine.config.monthlyBudgetUSD)
             goldieSays
             if !engine.suggestions.isEmpty { SuggestionsSection(engine: engine) }
             threadList
@@ -201,15 +201,12 @@ struct DetailsCard: View {
             Text(engine.brainStatus == "local LLM" ? "local AI" : "rules")
                 .font(.caption2).foregroundStyle(.secondary)
                 .help("Who's judging: \(engine.brainStatus)")
-            Menu {
-                HideMenuItems(engine: engine)
-            } label: {
+            Button { engine.hide() } label: {
                 Image(systemName: "eye.slash")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Hide Goldie")
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Hide Goldie (show her again from the menu bar)")
             Button {
                 withAnimation(.spring(response: 0.3)) { engine.expanded = false }
             } label: {
@@ -221,7 +218,7 @@ struct DetailsCard: View {
         }
     }
 
-    /// Goldie's verdict in one sentence, plus a Start fresh for a chat you selected.
+    /// Goldie's verdict in one sentence, plus a handoff for a chat you selected.
     private var goldieSays: some View {
         HStack(alignment: .top, spacing: 8) {
             Text("🐠")
@@ -233,7 +230,7 @@ struct DetailsCard: View {
                     HStack(spacing: 10) {
                         Text("Selected: “\(chat.title)”").font(.caption.weight(.semibold)).lineLimit(1)
                         Spacer()
-                        Button("Start fresh") { engine.startFresh(threadID: selected) }
+                        Button("Copy handoff") { engine.startFresh(threadID: selected) }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .tint(.orange)
@@ -297,35 +294,42 @@ struct DetailsCard: View {
     }
 }
 
-/// Spend vs budget, with a tick for where even spending would put you today.
+/// One budget across every AI tool, with who's contributing, and a tick for where even spending
+/// would put you today.
 struct BudgetSection: View {
     let snapshot: Snapshot
+    let sources: [SourceSpend]
     let budget: Double
-    let usageStatus: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Cursor this month").font(.caption).foregroundStyle(.secondary)
+                Text("AI Token Budget").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
                 Text(headline)
                     .font(.system(.callout, design: .rounded).weight(.semibold))
                     .monospacedDigit()
+                    .foregroundStyle(overPace ? Color.red : Color.primary)
             }
-            BudgetBar(spent: spentFraction, pace: paceFraction, color: barColor)
+            BudgetBar(segments: segments, pace: paceFraction)
                 .frame(height: 8)
+            HStack(spacing: 12) {
+                ForEach(sources) { source in SourceChip(source: source) }
+            }
             Text(subline).font(.caption2).foregroundStyle(.secondary)
         }
     }
 
     private var headline: String {
-        guard let month = snapshot.monthUSD else { return "—" }
-        return "\(Fmt.usd(month)) of \(Fmt.usd(budget))"
+        guard let total = snapshot.totalMonthUSD else { return "—" }
+        return "\(Fmt.usd(total)) of \(Fmt.usd(budget))"
     }
 
-    private var spentFraction: Double {
-        guard let month = snapshot.monthUSD, budget > 0 else { return 0 }
-        return month / budget
+    private var segments: [BudgetSegment] {
+        guard budget > 0 else { return [] }
+        return sources.compactMap { s in
+            s.monthUSD.map { BudgetSegment(color: SourceStyle.color(s.id), fraction: $0 / budget) }
+        }
     }
 
     private var paceFraction: Double {
@@ -334,38 +338,97 @@ struct BudgetSection: View {
         return now.timeIntervalSince(month.start) / month.duration
     }
 
-    private var barColor: Color {
-        if let projected = snapshot.projectedMonthUSD, projected > budget { return .red }
-        if spentFraction > paceFraction { return .orange }
-        return .green
-    }
+    private var overPace: Bool { (snapshot.projectedMonthUSD ?? 0) > budget }
 
     private var subline: String {
-        guard snapshot.monthUSD != nil else { return "Costs not connected: \(usageStatus)" }
-        var parts = ["Today \(Fmt.usd(snapshot.todayUSD))"]
-        if let projected = snapshot.projectedMonthUSD { parts.append("on pace for ~\(Fmt.usd(projected)) this month") }
+        guard snapshot.totalMonthUSD != nil else { return "No costs connected yet. Hover the icons to see why." }
+        var parts: [String] = []
+        if let projected = snapshot.projectedMonthUSD { parts.append("On pace for ~\(Fmt.usd(projected)) this month") }
+        if let today = snapshot.todayUSD { parts.append("Cursor today \(Fmt.usd(today))") }
         return parts.joined(separator: " · ")
     }
 }
 
-struct BudgetBar: View {
-    let spent: Double
-    let pace: Double
+struct BudgetSegment {
     let color: Color
+    let fraction: Double
+}
+
+/// Stacked by tool, so you can see who's eating the budget.
+struct BudgetBar: View {
+    let segments: [BudgetSegment]
+    let pace: Double
 
     var body: some View {
         GeometryReader { geo in
+            let total = segments.reduce(0) { $0 + $1.fraction }
+            let scale = total > 1 ? 1 / total : 1  // over budget: fill the bar, keep the proportions
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.08))
-                Capsule().fill(color)
-                    .frame(width: max(0, geo.size.width * CGFloat(clamp01(spent))))
+                HStack(spacing: 0) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        Rectangle()
+                            .fill(segment.color)
+                            .frame(width: max(0, geo.size.width * CGFloat(segment.fraction * scale)))
+                    }
+                }
+                .clipShape(Capsule())
                 Rectangle()
                     .fill(Color.primary.opacity(0.7))
                     .frame(width: 2, height: geo.size.height + 6)
                     .offset(x: geo.size.width * CGFloat(clamp01(pace)) - 1)
             }
         }
-        .help("Bar: spent vs budget. Tick: where you'd be today if you spent evenly all month.")
+        .help("Colored by tool. Tick: where you'd be today if you spent evenly all month.")
+    }
+}
+
+struct SourceChip: View {
+    let source: SourceSpend
+
+    var body: some View {
+        HStack(spacing: 4) {
+            SourceIcon(id: source.id)
+            Text(source.monthUSD.map { Fmt.usd($0) } ?? "—")
+                .font(.caption2.weight(.medium))
+                .monospacedDigit()
+                .foregroundStyle(source.monthUSD == nil ? Color.secondary : Color.primary)
+        }
+        .help("\(source.id.name): \(source.status)")
+    }
+}
+
+/// Small badge per tool. Stand-in symbols (not the tools' official logos).
+struct SourceIcon: View {
+    let id: SpendSourceID
+    var size: CGFloat = 16
+
+    var body: some View {
+        Image(systemName: SourceStyle.symbol(id))
+            .font(.system(size: size * 0.55, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(SourceStyle.color(id)))
+    }
+}
+
+enum SourceStyle {
+    static func symbol(_ id: SpendSourceID) -> String {
+        switch id {
+        case .cursor: return "cursorarrow"
+        case .claude: return "sparkle"
+        case .codex: return "terminal"
+        case .opencode: return "curlybraces"
+        }
+    }
+
+    static func color(_ id: SpendSourceID) -> Color {
+        switch id {
+        case .cursor: return Color(red: 0.30, green: 0.36, blue: 0.46)
+        case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
+        case .codex: return Color(red: 0.13, green: 0.60, blue: 0.50)
+        case .opencode: return Color(red: 0.47, green: 0.36, blue: 0.86)
+        }
     }
 }
 
@@ -521,7 +584,7 @@ struct ThreadRow: View {
         }
     }
 
-    /// The main action matches the situation; Start fresh is always there as a secondary option.
+    /// The main action matches the situation; Copy handoff is always there as a secondary option.
     @ViewBuilder private var actions: some View {
         let emphasize = isSelected || advice == .freshNow
         HStack(spacing: 12) {
@@ -532,12 +595,12 @@ struct ThreadRow: View {
                     .tint(.orange)
             }
             if emphasize && advice != .redirect {
-                Button("Start fresh") { engine.startFresh(threadID: thread.id) }
+                Button("Copy handoff") { engine.startFresh(threadID: thread.id) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .tint(.orange)
             } else {
-                Button("Start fresh") { engine.startFresh(threadID: thread.id) }
+                Button("Copy handoff") { engine.startFresh(threadID: thread.id) }
                     .buttonStyle(.borderless)
                     .font(.caption)
             }
@@ -594,11 +657,11 @@ struct Legend: View {
             item("Spent · last task · per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. A task is one message plus everything the agent did for it. \"est.\" = estimated from tokens.")
             item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side.")
             item("📄 Big reads", "One huge file or log in a chat is re-sent on every later step. Asking for just the lines you need keeps chats light.")
-            item("Budget bar & water level", "Month spend vs your budget. The tick shows where even spending would put you today. Goldie's water drains as you spend.")
+            item("AI Token Budget", "Month spend across Cursor, Claude, Codex and OpenCode vs your budget, colored by tool (hover an icon for its status). The tick shows where even spending would put you today. Goldie's water drains as you spend.")
             item("When to start fresh", "At a task boundary: the chat is heavy and waiting for you (✨). Mid-task (⏳), let it finish, because a new chat would re-pay to rediscover everything. Idle chats (💤) cost nothing. Stuck chats (↩︎) usually need a redirect, not a new chat.")
             item("Copy redirect", "Copies a message telling the agent to stop, summarize what it learned, and propose a different approach before running anything. Paste it into that chat.")
-            item("Start fresh", "Goldie writes a handoff doc (goal, files, where things stand) to .goldie/handoffs/ in that repo (kept out of git), opens a new Cursor chat that points at it, and sends it.")
-            item("Suggestions & Fix all", "The number on Goldie's bowl. Each one has its own button; Fix all turns on suggested guards and starts fresh chats one by one (up to 3).")
+            item("Copy handoff", "Copies a handoff (goal, where things stand, files that matter, what not to redo) to your clipboard. Paste it into a new chat.")
+            item("Suggestions", "The number on Goldie's bowl: things worth doing now, each with its own button.")
             item("Guards", "Loop guard stops a command repeated with no code change in between. Big-read guard makes the agent search large files first; asking again is allowed. Both are opt-in (menu bar).")
         }
         .font(.caption)
@@ -693,15 +756,7 @@ struct SuggestionsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Goldie's suggestions").font(.caption.weight(.semibold))
-                Spacer()
-                Button("Fix all") { engine.fixAll() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.orange)
-                    .help("Turns on suggested guards, then starts fresh chats one at a time (up to 3)")
-            }
+            Text("Goldie's suggestions").font(.caption.weight(.semibold))
             ForEach(engine.suggestions) { suggestion in
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: suggestion.icon)
@@ -727,16 +782,5 @@ struct SuggestionsSection: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.10)))
-    }
-}
-
-/// Shared by the card's hide button and the bowl's right-click menu.
-struct HideMenuItems: View {
-    @ObservedObject var engine: GoldieEngine
-
-    var body: some View {
-        Button("Hide until something needs me") { engine.hide(.untilNeeded) }
-        Button("Hide for 1 hour") { engine.hide(.forAnHour) }
-        Button("Hide (bring back from the menu bar)") { engine.hide(.untilShown) }
     }
 }

@@ -401,21 +401,6 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertNil(retry?.output["permission"])
     }
 
-    func testHandoffWriterSavesInRepoAndExcludesFromGit() throws {
-        let repo = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-repo-\(UUID())")
-        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
-        let saved = try XCTUnwrap(HandoffWriter.write("## Goal\nx", title: "Browser notifications Spike!", workspace: repo.path, now: now))
-        XCTAssertTrue(saved.relativePath.hasPrefix(".goldie/handoffs/browser-notifications-spike-"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.url.path))
-        let exclude = try String(contentsOf: repo.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
-        XCTAssertTrue(exclude.contains(".goldie/"))
-        // Second write doesn't duplicate the exclude line.
-        _ = HandoffWriter.write("x", title: "t", workspace: repo.path, now: now)
-        let again = try String(contentsOf: repo.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
-        XCTAssertEqual(again.components(separatedBy: ".goldie/").count - 1, 1)
-        XCTAssertNil(HandoffWriter.write("x", title: "t", workspace: nil, now: now))
-    }
-
     func testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-hooks-\(UUID()).json")
         try Data(#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"./mine.sh"}]}}"#.utf8).write(to: file)

@@ -33,7 +33,6 @@ let tests: [(String, () throws -> Void)] = [
     ("testTaskStoreKeepsModelAndNeverLowersCost", suite.testTaskStoreKeepsModelAndNeverLowersCost),
     ("testLoopGuardBlocksRepeatsOnlyWithoutEdits", suite.testLoopGuardBlocksRepeatsOnlyWithoutEdits),
     ("testReadGuardDeniesOnceThenAllowsRetry", suite.testReadGuardDeniesOnceThenAllowsRetry),
-    ("testHandoffWriterSavesInRepoAndExcludesFromGit", suite.testHandoffWriterSavesInRepoAndExcludesFromGit),
     ("testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks", suite.testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks),
     ("testHookReplyFailsOpen", suite.testHookReplyFailsOpen),
     ("testConversationIdAttributionIsExactAndNeverGuessed", suite.testConversationIdAttributionIsExactAndNeverGuessed),

@@ -82,7 +82,7 @@ struct BowlView: View {
                     GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size, hovering: hovering)
                 }
                 .clipShape(Circle())
-                .drawingGroup()  // render the scene in one GPU pass instead of many CPU-composited layers
+                // (No .drawingGroup(): it cut little CPU but kept ~200 MB of offscreen buffers alive.)
                 // glass
                 Circle().strokeBorder(
                     LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing),

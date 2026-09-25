@@ -86,8 +86,23 @@ public struct Snapshot: Codable, Equatable {
     public var freshBaselineTokens: Int = 0
     public var todayUSD: Double? = nil
     public var monthUSD: Double? = nil
-    /// Month-to-date spend extrapolated to the end of the month.
+    /// Month-to-date spend from other tools (Claude, Codex, OpenCode) that counts toward the budget.
+    public var otherSourcesMonthUSD: Double = 0
+    /// All tools' month-to-date spend extrapolated to the end of the month.
     public var projectedMonthUSD: Double? = nil
+
+    /// Everything that counts toward the AI token budget (Cursor + other tools).
+    public var totalMonthUSD: Double? {
+        if monthUSD == nil && otherSourcesMonthUSD == 0 { return nil }
+        return (monthUSD ?? 0) + otherSourcesMonthUSD
+    }
+
+    /// Recomputes the projection from all tools' spend (call after setting `otherSourcesMonthUSD`).
+    public mutating func projectTotal(now: Date) {
+        guard let total = totalMonthUSD, let interval = Calendar.current.dateInterval(of: .month, for: now) else { return }
+        let elapsed = max(now.timeIntervalSince(interval.start), 24 * 3600)
+        projectedMonthUSD = total * interval.duration / elapsed
+    }
 
     public static let empty = Snapshot(threads: [], parallelCount: 0, takenAt: .distantPast, cursorDBFound: false, hookEventsSeen: false)
 

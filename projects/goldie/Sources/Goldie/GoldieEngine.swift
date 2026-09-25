@@ -75,6 +75,9 @@ final class GoldieEngine: ObservableObject {
     private var ledger = UsageLedger()
     private let usageClient: CursorUsageClient?
     private var usageInFlight = false
+    /// Claude spend from the LLM gateway (nil until connected).
+    @Published private(set) var claudeMonthUSD: Double?
+    @Published private(set) var claudeStatus = "not connected"
     private var lastUsageAt = Date.distantPast
 
     init() {
@@ -109,7 +112,7 @@ final class GoldieEngine: ObservableObject {
         let focus = snapshot.thread(focusThread)?.contextRatio ?? worst
         s.puff = 1 + 0.35 * clamp01((focus - 1) / max(config.alarmedRatio - 1, 1))
         s.fryCount = min(5, max(0, snapshot.parallelCount - 1))
-        if let month = snapshot.monthUSD, config.monthlyBudgetUSD > 0 {
+        if let month = snapshot.totalMonthUSD, config.monthlyBudgetUSD > 0 {
             s.waterLevel = max(0.15, 1 - month / config.monthlyBudgetUSD)  // never fully empty: she needs water
         }
         return s
@@ -155,6 +158,35 @@ final class GoldieEngine: ObservableObject {
         refreshUsageIfDue()
     }
 
+    /// Every tool that counts toward the budget, for the budget card.
+    var sources: [SourceSpend] {
+        let s = config.sources
+        return [
+            SourceSpend(id: .cursor, monthUSD: snapshot.monthUSD, status: usageStatus),
+            SourceSpend(id: .claude, monthUSD: claudeMonthUSD, status: claudeStatus),
+            SourceSpend(id: .codex, monthUSD: s.codexMonthUSD, status: s.codexMonthUSD == nil ? "not connected (set sources.codexMonthUSD)" : "manual"),
+            SourceSpend(id: .opencode, monthUSD: s.opencodeMonthUSD, status: s.opencodeMonthUSD == nil ? "not connected (set sources.opencodeMonthUSD)" : "manual"),
+        ]
+    }
+
+    private func refreshClaude() {
+        if let hint = ClaudeGateway.setupHint(config: config.sources) {
+            claudeStatus = "not connected (\(hint))"
+            return
+        }
+        guard let key = ClaudeGateway.key() else { return }
+        let url = config.sources.claudeGatewayURL
+        Task { @MainActor [weak self] in
+            do {
+                let spend = try await ClaudeGateway.spend(baseURL: url, key: key)
+                self?.claudeMonthUSD = spend
+                self?.claudeStatus = "connected"
+            } catch {
+                self?.claudeStatus = "unavailable: \(error)"
+            }
+        }
+    }
+
     /// Pulls new Cursor usage events (real $) every few minutes; incremental after the first fetch.
     private func refreshUsageIfDue() {
         let now = Date()
@@ -162,6 +194,7 @@ final class GoldieEngine: ObservableObject {
               now.timeIntervalSince(lastUsageAt) >= config.usageRefreshMinutes * 60 else { return }
         usageInFlight = true
         lastUsageAt = now
+        refreshClaude()
         let from = ledger.fetchStart(now: now)
         Task { @MainActor [weak self] in
             do {
@@ -180,7 +213,10 @@ final class GoldieEngine: ObservableObject {
     private func apply(_ raw: Snapshot) {
         let now = Date()
         rawSnapshot = raw
-        let snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
+        var snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
+        // One budget for every AI tool: Cursor (live) + Claude (gateway) + Codex/OpenCode (manual for now).
+        snap.otherSourcesMonthUSD = (claudeMonthUSD ?? 0) + (config.sources.codexMonthUSD ?? 0) + (config.sources.opencodeMonthUSD ?? 0)
+        snap.projectTotal(now: now)
         snapshot = snap
         learn(from: snap, now: now)
         judge.observe(snap, now: now)
@@ -194,7 +230,6 @@ final class GoldieEngine: ObservableObject {
         }
         let decided = judge.finalize(proposed, heuristic: heuristic, snapshot: snap, now: now)
         verdict = decided
-        maybeReappear(decided, now: now)
 
         if decided.speak, let text = decided.message {
             speech = Speech(text: text, thread: decided.targetThread, until: now.addingTimeInterval(90))
@@ -327,36 +362,15 @@ final class GoldieEngine: ObservableObject {
         if case .startFresh(let id) = suggestion.action { judge.snooze(thread: id, now: Date()) }
     }
 
-    /// Turns on suggested guards, then starts fresh chats one at a time (at most 3).
-    func fixAll() {
-        let items = suggestions
-        expanded = false
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            for s in items {
-                switch s.action {
-                case .enableLoopGuard: self.setGuard(loop: true)
-                case .enableReadGuard: self.setGuard(read: true)
-                default: break
-                }
-            }
-            for s in items {
-                if case .startFresh(let id) = s.action {
-                    await self.startFreshNow(threadID: id)
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                }
-            }
-        }
-    }
-
     // MARK: Actions
 
     func startFresh(threadID: String) {
-        Task { @MainActor [weak self] in await self?.startFreshNow(threadID: threadID) }
+        Task { @MainActor [weak self] in await self?.copyHandoff(threadID: threadID) }
     }
 
-    /// Handoff → saved in the chat's repo → new Cursor chat opened (and sent) by the autopilot.
-    private func startFreshNow(threadID: String) async {
+    /// Writes the handoff (goal, where things stand, files, what not to redo) and copies it.
+    /// Nothing else: no files written, no apps opened. You paste it into a new chat.
+    private func copyHandoff(threadID: String) async {
         let chat = snapshot.thread(threadID)
         showToast("Writing a handoff for “\(chat?.title ?? "this chat")”…", seconds: 30)
         let collector = self.collector
@@ -370,17 +384,13 @@ final class GoldieEngine: ObservableObject {
         }
         var text = Handoff.draft(source)
         if let llm, llmHealthy, let refined = await llm.refineHandoff(text) { text = refined }
-
-        var prompt = text
-        if let saved = HandoffWriter.write(text, title: chat?.title ?? source.title, workspace: chat?.workspace, now: Date()) {
-            prompt = HandoffWriter.prompt(relativePath: saved.relativePath)
-        }
-        judge.recordFeedback(thread: threadID, feedback: "started fresh")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        judge.recordFeedback(thread: threadID, feedback: "copied handoff")
         dismissedSuggestions.insert("fresh-\(threadID)")
         speech = nil
         expanded = false
-        let status = await CursorAutopilot.startNewChat(prompt: prompt, workspace: chat?.workspace, config: config.autopilot)
-        showToast(status, seconds: 7)
+        showToast("Handoff copied. Paste it into a new chat (⌘V).", seconds: 5)
     }
 
     /// For a stuck chat, a better first move than a new chat: make the agent stop and rethink.
@@ -395,7 +405,6 @@ final class GoldieEngine: ObservableObject {
         let prompt = "Pause: \(what). Don't run or edit anything yet. In 5 bullets: what you've tried, what you learned, and your best hypothesis now. Then propose one different next step and wait for my OK."
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(prompt, forType: .string)
-        CursorAutopilot.bringCursorForward(workspace: t.workspace)
         judge.recordFeedback(thread: threadID, feedback: "copied redirect")
         dismissedSuggestions.insert("redirect-\(threadID)")
         expanded = false
@@ -404,55 +413,21 @@ final class GoldieEngine: ObservableObject {
 
     // MARK: Hiding
 
-    enum HideMode { case untilShown, forAnHour, untilNeeded }
-
     /// Set by the panel controller: actually shows/hides the floating window.
     var setPanelVisible: ((Bool) -> Void)?
-    private var hiddenUntil: Date?
-    private var hiddenUntilNeeded = false
-    /// What was already going on when you hid her; only something *new* brings her back.
-    private var alarmedWhenHidden = false
-    private var targetWhenHidden: String?
+    /// Shown in the menu while she's hidden.
+    @Published private(set) var hiddenHint: String?
 
-    func hide(_ mode: HideMode) {
+    func hide() {
         expanded = false
-        hiddenUntil = mode == .forAnHour ? Date().addingTimeInterval(3600) : nil
-        hiddenUntilNeeded = mode == .untilNeeded
-        alarmedWhenHidden = verdict.mood == .alarmed
-        targetWhenHidden = verdict.targetThread
         setPanelVisible?(false)
-        let hint: String
-        switch mode {
-        case .untilShown: hint = "Goldie is hidden. Bring her back from the 🐠 in the menu bar."
-        case .forAnHour: hint = "Goldie is hidden for an hour."
-        case .untilNeeded: hint = "Goldie is hidden until something needs you."
-        }
-        hiddenHint = hint
+        hiddenHint = "Goldie is hidden. Show her again from here."
     }
 
     func showGoldie() {
-        hiddenUntil = nil
-        hiddenUntilNeeded = false
         hiddenHint = nil
         setPanelVisible?(true)
     }
-
-    /// Called every poll: bring her back when the hour is up or something needs you.
-    private func maybeReappear(_ verdict: Verdict, now: Date) {
-        guard !panelVisible else { return }
-        if let until = hiddenUntil, now >= until {
-            showGoldie()
-        } else if hiddenUntilNeeded {
-            let newNudge = verdict.speak && verdict.targetThread != targetWhenHidden
-            let newAlarm = verdict.mood == .alarmed && !alarmedWhenHidden
-            if newNudge || newAlarm { showGoldie() }
-            // Once the earlier alarm clears, a later one counts as new.
-            if verdict.mood != .alarmed { alarmedWhenHidden = false }
-        }
-    }
-
-    /// Hidden Goldie can't show a toast, so the menu shows why she's gone.
-    @Published private(set) var hiddenHint: String?
 
     func snooze(threadID: String) {
         judge.snooze(thread: threadID, now: Date())
@@ -479,11 +454,6 @@ final class GoldieEngine: ObservableObject {
         if installHooks(quiet: true) {
             showToast(names.isEmpty ? "Guards off." : "\(names.joined(separator: " + ")) on. If it doesn't kick in, restart Cursor.", seconds: 6)
         }
-    }
-
-    func setAutoSend(_ on: Bool) {
-        updateConfig { $0.autopilot.autoSend = on }
-        showToast(on ? "Start fresh will send the new chat for you." : "Start fresh will stop before sending, so you press Enter.")
     }
 
     /// Re-read the file, change one thing, save: never clobbers edits made via "Open config".
@@ -559,7 +529,7 @@ struct Suggestion: Identifiable, Equatable {
 
     var actionLabel: String {
         switch action {
-        case .startFresh: return "Start fresh"
+        case .startFresh: return "Copy handoff"
         case .redirect: return "Copy redirect"
         case .enableLoopGuard, .enableReadGuard: return "Turn on"
         case .openRules: return "Open files"

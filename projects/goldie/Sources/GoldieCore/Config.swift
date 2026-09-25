@@ -27,8 +27,8 @@ public struct GoldieConfig: Codable, Equatable {
     public var llm: LLMConfig = LLMConfig()
     /// Opt-in prevention via Cursor's before-* hooks (Goldie offers these as suggestions).
     public var guards: GuardConfig = GuardConfig()
-    /// How "Start fresh" opens the new Cursor chat.
-    public var autopilot: AutopilotConfig = AutopilotConfig()
+    /// Other AI tools that count toward the monthly budget.
+    public var sources: SourcesConfig = SourcesConfig()
 
     /// Read your Cursor usage (per-request $) with your existing Cursor login. Read-only; the
     /// login token is only ever sent to cursor.com, exactly like the Cursor app does.
@@ -134,16 +134,3 @@ public struct GuardConfig: Codable, Equatable {
     public init() {}
 }
 
-public struct AutopilotConfig: Codable, Equatable {
-    /// "keystrokes": open a new Cursor chat with `newChatKeys`, paste, send (needs Accessibility permission).
-    /// "deeplink": open Cursor's prompt deeplink (prefills a new chat; press Enter yourself).
-    /// "clipboard": only copy the prompt and bring Cursor forward.
-    public var mode: String = "keystrokes"
-    /// Press Enter after pasting.
-    public var autoSend: Bool = true
-    /// Shortcuts that focus Cursor's chat and open a new one.
-    public var newChatKeys: [String] = ["cmd+l", "cmd+n"]
-    /// Put back whatever was on your clipboard afterwards.
-    public var restoreClipboard: Bool = true
-    public init() {}
-}

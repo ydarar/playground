@@ -46,7 +46,7 @@ struct MenuContent: View {
     var body: some View {
         Group {
             Text("Goldie: \(engine.verdict.mood.label)")
-            Text("Today \(Fmt.usd(engine.snapshot.todayUSD)) · this month \(Fmt.usd(engine.snapshot.monthUSD))")
+            Text("AI budget: \(Fmt.usd(engine.snapshot.totalMonthUSD)) of \(Fmt.usd(engine.config.monthlyBudgetUSD)) · Cursor today \(Fmt.usd(engine.snapshot.todayUSD))")
             Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
             Text("Cursor costs: \(engine.usageStatus)")
             if let hint = engine.hiddenHint { Text(hint) }
@@ -64,8 +64,6 @@ struct MenuContent: View {
                                                set: { engine.setGuard(loop: $0) }))
             Toggle("Big-read guard", isOn: Binding(get: { engine.config.guards.readGuard },
                                                    set: { engine.setGuard(read: $0) }))
-            Toggle("Send new chats automatically", isOn: Binding(get: { engine.config.autopilot.autoSend },
-                                                                 set: { engine.setAutoSend($0) }))
         }
         Divider()
         Group {
@@ -132,7 +130,7 @@ final class PanelController {
     }
 
     func toggle() {
-        if panel.isVisible { engine.hide(.untilShown) } else { engine.showGoldie() }
+        if panel.isVisible { engine.hide() } else { engine.showGoldie() }
     }
 }
 
