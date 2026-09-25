@@ -190,10 +190,11 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 
 ## 10. Open questions
 1. **DevBar log:** path, format, how often it refreshes, and is DevBar always running?
-2. **Adapter priority:** Codex is ~97% of spend, so the Codex sensor should probably ship first (v1), ahead of Cursor.
-3. Is the $800 per calendar month (assumed), or on a billing-cycle date?
-4. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
+2. Is the $800 per calendar month (assumed), or on a billing-cycle date?
+3. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
 
 ### Resolved
 - Meters report **monthly** (month-to-date) values.
 - Codex credits → $: **$0.065 / credit**.
+- **Cursor first.** Day-to-day work has moved to Cursor running Grok because it's cheap, so the POC targets Cursor only. Meters and credit conversion are deferred.
+- **Brain runtime for the POC:** `mlx_lm.server` (MLX, local, OpenAI-compatible HTTP) instead of embedding `mlx-swift`. Same model, far less integration risk. Embedding can come later.
