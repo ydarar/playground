@@ -58,13 +58,13 @@ public enum HeuristicBrain {
             }
             best = (thread: t, mood: a.mood, message: a.message, reason: a.reason)
         }
-        guard let best else {
+        guard let winner = best else {
             return Verdict(mood: .working, speak: false, targetThread: nil, message: nil,
                            reason: "Only snoozed threads are active.", source: "rules")
         }
-        let nudging = best.mood == .heavy || best.mood == .alarmed
-        return Verdict(mood: best.mood, speak: nudging, targetThread: nudging ? best.thread.id : nil,
-                       message: best.message, reason: best.reason, source: "rules")
+        let nudging = winner.mood == .heavy || winner.mood == .alarmed
+        return Verdict(mood: winner.mood, speak: nudging, targetThread: nudging ? winner.thread.id : nil,
+                       message: winner.message, reason: winner.reason, source: "rules")
     }
 
     static func assess(_ t: ThreadSnapshot, config: GoldieConfig) -> (mood: Mood, message: String?, reason: String) {

@@ -11,10 +11,12 @@ enum J {
         return obj(data)
     }
 
+    /// Finite numbers only: "nan"/"inf" would trap in Int() or throw in JSONSerialization.
     static func number(_ v: Any?) -> Double? {
-        if let n = v as? NSNumber { return n.doubleValue }
-        if let s = v as? String { return Double(s) }
-        return nil
+        var d: Double?
+        if let n = v as? NSNumber { d = n.doubleValue } else if let s = v as? String { d = Double(s) }
+        guard let d, d.isFinite else { return nil }
+        return d
     }
 
     static func int(_ v: Any?) -> Int? { number(v).map { Int($0) } }

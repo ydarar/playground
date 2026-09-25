@@ -53,8 +53,8 @@ final class GoldieEngine: ObservableObject {
 
     func start() {
         tick()
-        timer = Timer.scheduledTimer(withTimeInterval: config.pollSeconds, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+        timer = Timer.scheduledTimer(withTimeInterval: config.pollSeconds, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.tick() }
         }
     }
 
