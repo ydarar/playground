@@ -78,6 +78,9 @@ final class GoldieEngine: ObservableObject {
     /// Claude spend from the LLM gateway (nil until connected).
     @Published private(set) var claudeMonthUSD: Double?
     @Published private(set) var claudeStatus = "not connected"
+    private var claudeKey: ClaudeGateway.KeyLookup?
+    private var claudeInFlight = false
+    private var lastClaudeAt = Date.distantPast
     private var lastUsageAt = Date.distantPast
 
     init() {
@@ -156,6 +159,7 @@ final class GoldieEngine: ObservableObject {
             Task { @MainActor [weak self] in self?.apply(snap) }
         }
         refreshUsageIfDue()
+        refreshClaudeIfDue()
     }
 
     /// Every tool that counts toward the budget, for the budget card.
@@ -169,20 +173,52 @@ final class GoldieEngine: ObservableObject {
         ]
     }
 
-    private func refreshClaude() {
-        if let hint = ClaudeGateway.setupHint(config: config.sources) {
-            claudeStatus = "not connected (\(hint))"
+    /// Claude spend from the LLM gateway, on its own schedule (works even with Cursor tracking off).
+    /// The Keychain is read once, off the main thread, and cached, so there's no repeated access prompt.
+    private func refreshClaudeIfDue() {
+        let now = Date()
+        let url = config.sources.claudeGatewayURL
+        guard !url.isEmpty else {
+            claudeStatus = "not connected (add sources.claudeGatewayURL in config)"
             return
         }
-        guard let key = ClaudeGateway.key() else { return }
-        let url = config.sources.claudeGatewayURL
+        guard !claudeInFlight, now.timeIntervalSince(lastClaudeAt) >= config.usageRefreshMinutes * 60 else { return }
+        claudeInFlight = true
+        lastClaudeAt = now
+        let cached = claudeKey
         Task { @MainActor [weak self] in
-            do {
-                let spend = try await ClaudeGateway.spend(baseURL: url, key: key)
-                self?.claudeMonthUSD = spend
-                self?.claudeStatus = "connected"
-            } catch {
-                self?.claudeStatus = "unavailable: \(error)"
+            let lookup: ClaudeGateway.KeyLookup
+            if let cached {
+                lookup = cached
+            } else {
+                lookup = await Task.detached { ClaudeGateway.lookupKey() }.value
+            }
+            guard let self else { return }
+            defer { self.claudeInFlight = false }
+            switch lookup {
+            case .missing:
+                self.claudeStatus = "not connected (no gateway key: \(ClaudeGateway.keyHelp))"
+                return  // not cached: picked up once you add it
+            case .denied:
+                self.claudeKey = .denied
+                self.claudeStatus = "Keychain access to the gateway key was denied (allow it, or \(ClaudeGateway.keyHelp))"
+                return
+            case .found(let key):
+                self.claudeKey = lookup
+                do {
+                    let spend = try await ClaudeGateway.spend(baseURL: url, key: key)
+                    if spend.isPeriod {
+                        self.claudeMonthUSD = spend.usd
+                        self.claudeStatus = "connected (gateway budget period" + (spend.resetsAt.map { ", resets \($0)" } ?? "") + ")"
+                    } else {
+                        let mtd = ClaudeGateway.monthToDate(lifetime: spend.usd, now: Date())
+                        self.claudeMonthUSD = mtd.usd
+                        let since = mtd.since.formatted(date: .abbreviated, time: .omitted)
+                        self.claudeStatus = "connected (key reports lifetime spend; counting this month since \(since))"
+                    }
+                } catch {
+                    self.claudeStatus = "unavailable: \(error)"
+                }
             }
         }
     }
@@ -194,7 +230,6 @@ final class GoldieEngine: ObservableObject {
               now.timeIntervalSince(lastUsageAt) >= config.usageRefreshMinutes * 60 else { return }
         usageInFlight = true
         lastUsageAt = now
-        refreshClaude()
         let from = ledger.fetchStart(now: now)
         Task { @MainActor [weak self] in
             do {
@@ -216,6 +251,7 @@ final class GoldieEngine: ObservableObject {
         var snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
         // One budget for every AI tool: Cursor (live) + Claude (gateway) + Codex/OpenCode (manual for now).
         snap.otherSourcesMonthUSD = (claudeMonthUSD ?? 0) + (config.sources.codexMonthUSD ?? 0) + (config.sources.opencodeMonthUSD ?? 0)
+        snap.otherSourcesConnected = claudeMonthUSD != nil || config.sources.codexMonthUSD != nil || config.sources.opencodeMonthUSD != nil
         snap.projectTotal(now: now)
         snapshot = snap
         learn(from: snap, now: now)

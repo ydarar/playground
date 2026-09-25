@@ -45,6 +45,7 @@ let tests: [(String, () throws -> Void)] = [
     ("testBaselineIsLearnedFromFirstMessages", suite.testBaselineIsLearnedFromFirstMessages),
     ("testSubagentCostsRollUpToTheParentChat", suite.testSubagentCostsRollUpToTheParentChat),
     ("testShellOutputLabelSaysWhatItIs", suite.testShellOutputLabelSaysWhatItIs),
+    ("testClaudeLifetimeSpendBecomesMonthToDate", suite.testClaudeLifetimeSpendBecomesMonthToDate),
 ]
 
 var failedTests = 0

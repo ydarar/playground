@@ -43,9 +43,17 @@ public struct SourcesConfig: Codable, Equatable {
 public enum ClaudeGateway {
     public static let keychainService = "goldie-llmg"
 
+    public enum KeyLookup: Equatable {
+        case found(String)
+        case missing
+        /// The Keychain item exists but Goldie wasn't allowed to read it.
+        case denied
+    }
+
     /// The gateway virtual key: env var first, then the Keychain. Never logged or stored by Goldie.
-    public static func key() -> String? {
-        if let env = ProcessInfo.processInfo.environment["GOLDIE_LLMG_KEY"], !env.isEmpty { return env }
+    /// Call off the main thread: the Keychain may show an access prompt.
+    public static func lookupKey() -> KeyLookup {
+        if let env = ProcessInfo.processInfo.environment["GOLDIE_LLMG_KEY"], !env.isEmpty { return .found(env) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -53,13 +61,28 @@ public enum ClaudeGateway {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty else { return nil }
-        return key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty else { return .missing }
+            return .found(key.trimmingCharacters(in: .whitespacesAndNewlines))
+        case errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed:
+            return .denied
+        default:
+            return .missing
+        }
+    }
+
+    public struct Spend: Equatable {
+        public var usd: Double
+        /// True when the key has a budget period (e.g. monthly), so `usd` resets each period.
+        /// False means LiteLLM reports the key's lifetime spend.
+        public var isPeriod: Bool
+        public var resetsAt: String?
     }
 
     /// Spend for this key from LiteLLM's `/key/info` (`info.spend`, else top-level `spend`).
-    public static func spend(baseURL: String, key: String) async throws -> Double {
+    public static func spend(baseURL: String, key: String) async throws -> Spend {
         let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         guard let url = URL(string: trimmed + "/key/info") else { throw GoldieError("bad claudeGatewayURL") }
         var request = URLRequest(url: url, timeoutInterval: 15)
@@ -67,15 +90,28 @@ public enum ClaudeGateway {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200, let body = J.obj(data) else { throw GoldieError("gateway returned HTTP \(status)") }
-        let info = body["info"] as? [String: Any] ?? [:]
-        guard let spend = J.number(info["spend"]) ?? J.number(body["spend"]) else { throw GoldieError("no spend in /key/info") }
-        return spend
+        let info = body["info"] as? [String: Any] ?? body
+        guard let usd = J.number(info["spend"]) ?? J.number(body["spend"]) else { throw GoldieError("no spend in /key/info") }
+        let duration = (info["budget_duration"] as? String) ?? ""
+        return Spend(usd: usd, isPeriod: !duration.isEmpty, resetsAt: info["budget_reset_at"] as? String)
     }
 
-    /// Status text for the budget row when Claude isn't connected yet.
-    public static func setupHint(config: SourcesConfig) -> String? {
-        if config.claudeGatewayURL.isEmpty { return "add sources.claudeGatewayURL in config" }
-        if key() == nil { return "add your gateway key to the Keychain (service goldie-llmg)" }
-        return nil
+    /// Month-to-date from a lifetime total: the difference from the first reading seen this month
+    /// (persisted), so Goldie never counts earlier months against this month's budget.
+    public static func monthToDate(lifetime: Double, now: Date, defaults: UserDefaults = .standard) -> (usd: Double, since: Date) {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM"
+        let key = "goldie.claude.baseline." + f.string(from: now)
+        let sinceKey = key + ".since"
+        if defaults.object(forKey: key) == nil {
+            defaults.set(lifetime, forKey: key)
+            defaults.set(now.timeIntervalSince1970, forKey: sinceKey)
+        }
+        let baseline = defaults.double(forKey: key)
+        let since = Date(timeIntervalSince1970: defaults.double(forKey: sinceKey))
+        return (max(0, lifetime - baseline), since)
     }
+
+    public static let keyHelp = "store it with: security add-generic-password -s goldie-llmg -a llmg -w '<key>' -T <path to .build/release/Goldie> (or set GOLDIE_LLMG_KEY)"
 }

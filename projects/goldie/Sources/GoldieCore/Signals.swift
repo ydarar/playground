@@ -88,12 +88,14 @@ public struct Snapshot: Codable, Equatable {
     public var monthUSD: Double? = nil
     /// Month-to-date spend from other tools (Claude, Codex, OpenCode) that counts toward the budget.
     public var otherSourcesMonthUSD: Double = 0
+    /// True when at least one non-Cursor tool is connected (so a $0 total still shows as $0).
+    public var otherSourcesConnected: Bool = false
     /// All tools' month-to-date spend extrapolated to the end of the month.
     public var projectedMonthUSD: Double? = nil
 
     /// Everything that counts toward the AI token budget (Cursor + other tools).
     public var totalMonthUSD: Double? {
-        if monthUSD == nil && otherSourcesMonthUSD == 0 { return nil }
+        if monthUSD == nil && !otherSourcesConnected { return nil }
         return (monthUSD ?? 0) + otherSourcesMonthUSD
     }
 

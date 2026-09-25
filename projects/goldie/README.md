@@ -93,7 +93,10 @@ Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
 
 **AI Token Budget.** One budget across tools, stacked by who's spending:
 - **Cursor:** live, from Cursor's usage (charged amounts; matched the dashboard within 0.3%).
-- **Claude:** from your LLM gateway's `/key/info`. Set `sources.claudeGatewayURL` in the config and store your key with `security add-generic-password -s goldie-llmg -a llmg -w '<key>'` (or env `GOLDIE_LLMG_KEY`).
+- **Claude:** from your LLM gateway's `/key/info`.
+  - Set `sources.claudeGatewayURL` in the config.
+  - Store the key once, pre-approving Goldie so macOS doesn't ask every time: `security add-generic-password -s goldie-llmg -a llmg -w '<key>' -T "$PWD/.build/release/Goldie"`. Or set env `GOLDIE_LLMG_KEY`.
+  - If the key has a monthly budget period, that spend is used as-is. If it only reports lifetime spend, Goldie counts from the first reading it sees each month, and says so when you hover the icon.
 - **Codex / OpenCode:** no API hookup yet. Set `sources.codexMonthUSD` / `sources.opencodeMonthUSD` to include them.
 
 Hover a tool's icon for its status. The icons are stand-in symbols, not official logos.

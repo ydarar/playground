@@ -563,5 +563,13 @@ final class GoldieCoreTests: XCTestCase {
         let label = Signals.build(id: "a", thread: t, hook: nil, config: GoldieConfig(), now: now).bloatLabel ?? ""
         XCTAssertTrue(label.hasPrefix("output of `python3 -c"))
     }
+
+    func testClaudeLifetimeSpendBecomesMonthToDate() {
+        let defaults = UserDefaults(suiteName: "goldie-test-\(UUID())")!
+        let first = ClaudeGateway.monthToDate(lifetime: 1_000, now: now, defaults: defaults)
+        XCTAssertEqual(first.usd, 0)  // first reading this month = baseline, never counts old months
+        let later = ClaudeGateway.monthToDate(lifetime: 1_042.5, now: now.addingTimeInterval(3600), defaults: defaults)
+        XCTAssertEqual(later.usd, 42.5, accuracy: 0.001)
+    }
 }
 #endif
