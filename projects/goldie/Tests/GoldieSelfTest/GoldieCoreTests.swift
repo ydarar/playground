@@ -22,15 +22,21 @@ final class GoldieCoreTests: XCTestCase {
         let c = GoldieConfig()
         XCTAssertEqual(HeuristicBrain.judge(snapshot([]), config: c, snoozed: []).mood, .sleeping)
         XCTAssertEqual(HeuristicBrain.judge(snapshot([thread(ratio: 2)]), config: c, snoozed: []).mood, .working)
-        XCTAssertEqual(HeuristicBrain.judge(snapshot([thread(ratio: 5)]), config: c, snoozed: []).mood, .heavy)
-        XCTAssertEqual(HeuristicBrain.judge(snapshot([thread(ratio: 9)]), config: c, snoozed: []).mood, .alarmed)
+        // Heavy mid-task: shown, not nagged.
+        let midTask = HeuristicBrain.judge(snapshot([thread(ratio: 9)]), config: c, snoozed: [])
+        XCTAssertEqual(midTask.mood, .heavy)
+        XCTAssertFalse(midTask.speak)
+        // Heavy and waiting for you: the moment to nudge.
+        let boundary = HeuristicBrain.judge(snapshot([thread(ratio: 5, running: false)]), config: c, snoozed: [])
+        XCTAssertEqual(boundary.mood, .heavy)
+        XCTAssertTrue(boundary.speak)
         XCTAssertEqual(HeuristicBrain.judge(snapshot([thread(ratio: 1, loop: 0.8)]), config: c, snoozed: []).mood, .alarmed)
         XCTAssertEqual(HeuristicBrain.judge(snapshot([thread(ratio: 1)], parallel: 4), config: c, snoozed: []).mood, .alarmed)
     }
 
     func testRulesPickWorstThreadAndRespectSnooze() {
         let c = GoldieConfig()
-        let snap = snapshot([thread("a", ratio: 5), thread("b", ratio: 6)])
+        let snap = snapshot([thread("a", ratio: 5, running: false), thread("b", ratio: 6, running: false)])
         XCTAssertEqual(HeuristicBrain.judge(snap, config: c, snoozed: []).targetThread, "b")
         XCTAssertEqual(HeuristicBrain.judge(snap, config: c, snoozed: ["b"]).targetThread, "a")
     }
@@ -44,14 +50,14 @@ final class GoldieCoreTests: XCTestCase {
 
     func testSpeechBudgetAndAlarmFloor() {
         let judge = Judge(config: GoldieConfig())
-        let snap = snapshot([thread(ratio: 5)])
+        let snap = snapshot([thread(ratio: 5, running: false)])
         let rules = judge.heuristic(snap, now: now)
         XCTAssertTrue(judge.finalize(rules, heuristic: rules, snapshot: snap, now: now).speak)
         // Same nudge 1 minute later is suppressed by the cooldown.
         XCTAssertFalse(judge.finalize(rules, heuristic: rules, snapshot: snap, now: now.addingTimeInterval(60)).speak)
 
         // An LLM saying "working" can't hide an alarm.
-        let alarmSnap = snapshot([thread(ratio: 12)])
+        let alarmSnap = snapshot([thread(ratio: 1, loop: 0.8)])
         let alarm = judge.heuristic(alarmSnap, now: now)
         let calm = Verdict(mood: .working, speak: false, targetThread: nil, message: nil, reason: "fine", source: "llm")
         XCTAssertEqual(judge.finalize(calm, heuristic: alarm, snapshot: alarmSnap, now: now).mood, .alarmed)
@@ -59,7 +65,7 @@ final class GoldieCoreTests: XCTestCase {
 
     func testCelebratesFreshStartAfterNudge() {
         let judge = Judge(config: GoldieConfig())
-        let heavy = snapshot([thread("old", ratio: 5)])
+        let heavy = snapshot([thread("old", ratio: 5, running: false)])
         judge.observe(heavy, now: now)
         let rules = judge.heuristic(heavy, now: now)
         _ = judge.finalize(rules, heuristic: rules, snapshot: heavy, now: now)
@@ -481,7 +487,8 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertFalse(e.chargeable)
         XCTAssertEqual(e.chargedCents, 5)
         XCTAssertEqual(e.discountPercent, 7)
-        XCTAssertEqual(e.cents, 10)  // Goldie's total stays raw until the dashboard comparison picks a formula
+        XCTAssertEqual(e.cents, 5)       // what you're charged (matched the dashboard within 0.2%)
+        XCTAssertEqual(e.listCents, 10)  // list price, kept for reconciliation
         let lines = UsageDiagnostics.reconciliation([e], now: now).joined(separator: "\n")
         XCTAssertTrue(lines.contains("$0.10"))   // A raw
         XCTAssertTrue(lines.contains("$0.09"))   // B after 7% discount (9.3¢)
@@ -519,5 +526,56 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(CursorProbe.describe(["file:///Users/me/secret.swift": 1]), "object(1 keys, names hidden)")
         XCTAssertEqual(CursorProbe.describe(["modelName": "x", "maxMode": 0] as [String: Any]), "object{maxMode,modelName}")
     }
+
+    // MARK: Situational guidance, baseline, subagents
+
+    func testAdviceDependsOnTheSituation() {
+        let c = GoldieConfig()
+        XCTAssertEqual(thread(ratio: 1.5).advice(config: c, now: now), .fine)
+        XCTAssertEqual(thread(ratio: 6, running: true).advice(config: c, now: now), .finishThenFresh)
+        XCTAssertEqual(thread(ratio: 6, running: false).advice(config: c, now: now), .freshNow)
+        var idle = thread(ratio: 6, running: false)
+        idle.lastActivity = now.addingTimeInterval(-45 * 60)
+        XCTAssertEqual(idle.advice(config: c, now: now), .idleHeavy)
+        var stuck = thread(ratio: 1, running: true)
+        stuck.maxRepeatCommand = 4
+        XCTAssertEqual(stuck.advice(config: c, now: now), .redirect)  // even when light
+    }
+
+    func testBaselineIsLearnedFromFirstMessages() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-baseline-\(UUID()).json")
+        let learner = BaselineLearner(file: url)
+        XCTAssertEqual(learner.baseline(fallback: 15_000), 15_000)  // not enough data yet
+        for (i, tokens) in [30_000, 26_000, 34_000].enumerated() {
+            var t = thread("n\(i)", ratio: 1)
+            t.userTurns = 1
+            t.contextSource = "reported"
+            t.contextTokens = tokens
+            learner.observe(t)
+        }
+        XCTAssertEqual(learner.baseline(fallback: 15_000), 30_000)
+        learner.saveIfNeeded()
+        XCTAssertEqual(BaselineLearner(file: url).baseline(fallback: 15_000), 30_000)  // persisted
+    }
+
+    func testSubagentCostsRollUpToTheParentChat() {
+        var parent = thread("p", ratio: 2)
+        parent.subagentIds = ["sub-1"]
+        var e = event(now.addingTimeInterval(-30), cents: 25)
+        e.conversationId = "sub-1"
+        var ledger = UsageLedger()
+        ledger.merge([e], now: now)
+        let t = CostModel.enrich(snapshot([parent]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.spentUSD ?? 0, 0.25, accuracy: 0.0001)
+    }
+
+    func testShellOutputLabelSaysWhatItIs() {
+        let dump = CursorStore.parseBubble(["type": 2, "toolFormerData": [
+            "name": "run_terminal_command_v2", "rawArgs": #"{"command":"python3 -c 'print(open(\"/tmp/x\").read())'"}"#,
+            "result": String(repeating: "x", count: 60_000)]])
+        let t = CursorThread(id: "a", title: "t", model: nil, maxMode: false, createdAt: nil, lastUpdatedAt: now,
+                             reportedContextTokens: nil, bubbles: [dump])
+        let label = Signals.build(id: "a", thread: t, hook: nil, config: GoldieConfig(), now: now).bloatLabel ?? ""
+        XCTAssertTrue(label.hasPrefix("output of `python3 -c"))
+    }
 }
-#endif

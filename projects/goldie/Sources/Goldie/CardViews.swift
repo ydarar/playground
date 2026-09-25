@@ -46,6 +46,7 @@ struct GoldieRootView: View {
                         withAnimation(.spring(response: 0.3)) { engine.expanded.toggle() }
                     }
                     .onHover { hovering = $0 }
+                    .contextMenu { HideMenuItems(engine: engine) }
                     .help(engine.suggestions.isEmpty ? "Click for details · drag to move" : "Goldie has suggestions: click to see them")
             }
         }
@@ -156,9 +157,28 @@ struct DetailsCard: View {
     @ObservedObject var engine: GoldieEngine
     @State private var showLegend = false
 
+    /// Room above the bowl; the card scrolls when its content is taller.
+    private var maxBodyHeight: CGFloat {
+        max(220, PanelController.size.height - CGFloat(engine.bowlSize) - 150)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
+            header  // pinned: close/hide are always reachable
+            ViewThatFits(in: .vertical) {
+                content
+                ScrollView(.vertical, showsIndicators: true) { content.padding(.trailing, 6) }
+            }
+            .frame(maxHeight: maxBodyHeight)
+        }
+        .padding(14)
+        .frame(width: 350, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if engine.needsSetup { SetupChecklist(engine: engine) }
             BudgetSection(snapshot: engine.snapshot, budget: engine.config.monthlyBudgetUSD, usageStatus: engine.usageStatus)
             goldieSays
@@ -168,10 +188,6 @@ struct DetailsCard: View {
             footer
             if showLegend { Legend() }
         }
-        .padding(14)
-        .frame(width: 350, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
     }
 
     private var header: some View {
@@ -185,6 +201,15 @@ struct DetailsCard: View {
             Text(engine.brainStatus == "local LLM" ? "local AI" : "rules")
                 .font(.caption2).foregroundStyle(.secondary)
                 .help("Who's judging: \(engine.brainStatus)")
+            Menu {
+                HideMenuItems(engine: engine)
+            } label: {
+                Image(systemName: "eye.slash")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Hide Goldie")
             Button {
                 withAnimation(.spring(response: 0.3)) { engine.expanded = false }
             } label: {
@@ -247,18 +272,13 @@ struct DetailsCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         } else {
-            let rows = VStack(spacing: 6) {
+            VStack(spacing: 6) {
                 ForEach(sortedThreads) { thread in
                     ThreadRow(thread: thread,
                               isTarget: thread.id == engine.nudgeTarget,
                               isSelected: thread.id == engine.selectedThread,
                               engine: engine)
                 }
-            }
-            if engine.snapshot.threads.count > 2 {
-                ScrollView { rows }.frame(height: 250)
-            } else {
-                rows
             }
         }
     }
@@ -428,16 +448,12 @@ struct ThreadRow: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if isSelected {
-                    Button("Start fresh") { engine.startFresh(threadID: thread.id) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(.orange)
-                } else {
-                    Button("Start fresh") { engine.startFresh(threadID: thread.id) }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
+                if let line = situationLine {
+                    Text(line)
+                        .font(.caption.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                actions
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
@@ -492,6 +508,42 @@ struct ThreadRow: View {
     }
 
     /// The single most useful way to make this chat cheaper, strongest evidence first.
+    private var advice: ChatAdvice { thread.advice(config: engine.config, now: Date()) }
+
+    /// What to do about this chat right now, in plain words.
+    private var situationLine: String? {
+        switch advice {
+        case .redirect: return "↩︎ Stuck: send a redirect rather than another lap (or start fresh with a don't-repeat list)."
+        case .freshNow: return "✨ Good moment: it's waiting for you. Start your next task in a fresh chat."
+        case .finishThenFresh: return "⏳ Mid-task: let it finish here, then start the next task fresh."
+        case .idleHeavy: return "💤 Idle, so it costs nothing now. If you come back to it, start fresh instead."
+        case .fine: return nil
+        }
+    }
+
+    /// The main action matches the situation; Start fresh is always there as a secondary option.
+    @ViewBuilder private var actions: some View {
+        let emphasize = isSelected || advice == .freshNow
+        HStack(spacing: 12) {
+            if advice == .redirect {
+                Button("Copy redirect") { engine.copyRedirect(threadID: thread.id) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+            }
+            if emphasize && advice != .redirect {
+                Button("Start fresh") { engine.startFresh(threadID: thread.id) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+            } else {
+                Button("Start fresh") { engine.startFresh(threadID: thread.id) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+        }
+    }
+
     private var tipLine: String? {
         if let kind = thread.currentKind,
            let fit = ModelFit.advice(kind: kind, model: thread.effectiveModel, stats: engine.modelStats) {
@@ -500,8 +552,8 @@ struct ThreadRow: View {
         if thread.bloatTokens >= 10_000, let label = thread.bloatLabel {
             return "📄 \(label) (~\(Fmt.tokens(thread.bloatTokens)) tokens) is re-sent on every step. Next time ask for just the lines you need, or start fresh."
         }
-        if thread.contextRatio >= 2 {
-            return "A new chat would be ~\(Int(thread.contextRatio.rounded()))× cheaper per step."
+        if advice != .fine, thread.contextRatio >= 2 {
+            return "A fresh chat would be ~\(Int(thread.contextRatio.rounded()))× cheaper per step (fresh ≈ \(Fmt.tokens(engine.snapshot.freshBaselineTokens)) tokens, learned from your chats)."
         }
         return nil
     }
@@ -543,6 +595,8 @@ struct Legend: View {
             item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side.")
             item("📄 Big reads", "One huge file or log in a chat is re-sent on every later step. Asking for just the lines you need keeps chats light.")
             item("Budget bar & water level", "Month spend vs your budget. The tick shows where even spending would put you today. Goldie's water drains as you spend.")
+            item("When to start fresh", "At a task boundary: the chat is heavy and waiting for you (✨). Mid-task (⏳), let it finish, because a new chat would re-pay to rediscover everything. Idle chats (💤) cost nothing. Stuck chats (↩︎) usually need a redirect, not a new chat.")
+            item("Copy redirect", "Copies a message telling the agent to stop, summarize what it learned, and propose a different approach before running anything. Paste it into that chat.")
             item("Start fresh", "Goldie writes a handoff doc (goal, files, where things stand) to .goldie/handoffs/ in that repo (kept out of git), opens a new Cursor chat that points at it, and sends it.")
             item("Suggestions & Fix all", "The number on Goldie's bowl. Each one has its own button; Fix all turns on suggested guards and starts fresh chats one by one (up to 3).")
             item("Guards", "Loop guard stops a command repeated with no code change in between. Big-read guard makes the agent search large files first; asking again is allowed. Both are opt-in (menu bar).")
@@ -673,5 +727,16 @@ struct SuggestionsSection: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.10)))
+    }
+}
+
+/// Shared by the card's hide button and the bowl's right-click menu.
+struct HideMenuItems: View {
+    @ObservedObject var engine: GoldieEngine
+
+    var body: some View {
+        Button("Hide until something needs me") { engine.hide(.untilNeeded) }
+        Button("Hide for 1 hour") { engine.hide(.forAnHour) }
+        Button("Hide (bring back from the menu bar)") { engine.hide(.untilShown) }
     }
 }

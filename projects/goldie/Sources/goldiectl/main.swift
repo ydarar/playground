@@ -6,7 +6,7 @@ goldiectl: Goldie's command-line helper
 
   goldiectl probe                   Print the structure of your Cursor data (no message text). Paste it back to Claude.
   goldiectl usage                   Check that Goldie can read your Cursor costs (no secrets printed).
-  goldiectl snapshot                Print what Goldie currently sees, as JSON.
+  goldiectl snapshot [--no-costs]   Print what Goldie currently sees (with costs and billed models), as JSON.
   goldiectl install-cursor-hooks    Add Goldie's observe-only hooks to ~/.cursor/hooks.json (keeps yours).
   goldiectl uninstall-cursor-hooks  Remove them.
   goldiectl init-config             Write ~/.config/goldie/config.json with defaults.
@@ -40,7 +40,17 @@ case "usage":
     print(await UsageDiagnostics.report())
 
 case "snapshot":
-    let snap = SnapshotCollector(config: GoldieConfig.load()).collect()
+    // Same view as the app, including real costs and billed models (skip with --no-costs).
+    let config = GoldieConfig.load()
+    var snap = SnapshotCollector(config: config).collect()
+    if config.cursorUsageAPI, !args.contains("--no-costs") {
+        let now = Date()
+        if let result = try? await CursorUsageClient().fetchAll(since: UsageLedger.monthStart(now), until: now) {
+            var ledger = UsageLedger()
+            ledger.merge(result.events, now: now)
+            snap = CostModel.enrich(snap, ledger: ledger, config: config, now: now)
+        }
+    }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601

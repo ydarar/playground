@@ -29,6 +29,8 @@ public struct CursorThread: Equatable {
     /// Context size if Cursor stores it on the composer (field names vary by version).
     public var reportedContextTokens: Int?
     public var bubbles: [CursorBubble]
+    /// Sub-task chats this chat spawned (Cursor's task tool).
+    public var subagentIds: [String] = []
 }
 
 /// Reads Cursor agent ("composer") threads from Cursor's local state DB.
@@ -99,26 +101,58 @@ public final class CursorStore {
     }
 
     private var recentCache: (at: Date, refs: [ComposerRef])?
+    private var headersAvailable: Bool?
+    private var subagentCache: (at: Date, ids: Set<String>)?
 
-    /// Most recently updated composers, by `lastUpdatedAt`. This JSON-parses every composer row,
-    /// so the list is cached for a minute; hooks cover real-time activity in between.
-    /// (Rowid order looked like a cheap shortcut, but on Cursor 3.x it doesn't track recency.)
+    /// Cursor 3.x keeps a small `composerHeaders` table (id, lastUpdatedAt, isSubagent, isArchived…).
+    /// Reading it is far cheaper than JSON-parsing every chat.
+    private func hasHeaders(_ db: SQLiteReader) -> Bool {
+        if let known = headersAvailable { return known }
+        let found = !db.strings("SELECT name FROM sqlite_master WHERE type='table' AND name='composerHeaders'").isEmpty
+        headersAvailable = found
+        return found
+    }
+
+    /// Most recently updated top-level chats (no sub-task chats, no archived ones).
     public func recentComposers(limit: Int, now: Date = Date(), maxAge: TimeInterval = 60) -> [ComposerRef] {
-        if let cached = recentCache, now.timeIntervalSince(cached.at) < maxAge { return cached.refs }
         guard let db = open() else { return [] }
+        if hasHeaders(db) {
+            let rows = db.strings("SELECT composerId, lastUpdatedAt FROM composerHeaders WHERE IFNULL(isArchived, 0) = 0 AND IFNULL(isSubagent, 0) = 0 ORDER BY lastUpdatedAt DESC LIMIT \(limit)")
+            return rows.compactMap { row -> ComposerRef? in
+                guard row.count == 2, let id = row[0], let raw = row[1], let updated = J.date(Double(raw)) else { return nil }
+                return ComposerRef(id: id, updated: updated, signature: "")
+            }
+        }
+        // Older Cursor: JSON-parse every composer, so cache the list for a minute (hooks cover real time).
+        if let cached = recentCache, now.timeIntervalSince(cached.at) < maxAge { return cached.refs }
         let rows = db.strings("SELECT key, json_extract(CAST(value AS TEXT), '$.lastUpdatedAt') FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;' ORDER BY 2 DESC LIMIT \(limit)")
         let refs = rows.compactMap { row -> ComposerRef? in
             guard row.count == 2, let key = row[0], let raw = row[1], let updated = J.date(Double(raw)) else { return nil }
-            // Signature left empty: the collector fetches a fresh one per poll for active candidates.
             return ComposerRef(id: String(key.dropFirst("composerData:".count)), updated: updated, signature: "")
         }
         recentCache = (at: now, refs: refs)
         return refs
     }
 
+    /// Sub-task chats, so they aren't shown as separate chats (their cost rolls up to the parent).
+    public func subagentIDs(now: Date = Date()) -> Set<String> {
+        if let cached = subagentCache, now.timeIntervalSince(cached.at) < 60 { return cached.ids }
+        guard let db = open(), hasHeaders(db) else { return [] }
+        let ids = Set(db.strings("SELECT composerId FROM composerHeaders WHERE isSubagent = 1").compactMap { $0.first ?? nil })
+        subagentCache = (at: now, ids: ids)
+        return ids
+    }
+
+    /// Changes whenever the chat changes. Uses the headers table when present (no JSON parsing).
     public func signature(id: String) -> String? {
-        guard let db = open(),
-              let row = db.strings("SELECT json_extract(CAST(value AS TEXT), '$.lastUpdatedAt'), length(value) FROM cursorDiskKV WHERE key = ?", ["composerData:\(id)"]).first,
+        guard let db = open() else { return nil }
+        if hasHeaders(db) {
+            let updated = db.strings("SELECT lastUpdatedAt FROM composerHeaders WHERE composerId = ?", [id]).first?.first ?? nil
+            let length = db.strings("SELECT length(value) FROM cursorDiskKV WHERE key = ?", ["composerData:\(id)"]).first?.first ?? nil
+            guard updated != nil || length != nil else { return nil }
+            return "\(updated ?? "-")/\(length ?? "-")"
+        }
+        guard let row = db.strings("SELECT json_extract(CAST(value AS TEXT), '$.lastUpdatedAt'), length(value) FROM cursorDiskKV WHERE key = ?", ["composerData:\(id)"]).first,
               row.count == 2 else { return nil }
         return "\(row[0] ?? "-")/\(row[1] ?? "-")"
     }
@@ -154,7 +188,8 @@ public final class CursorStore {
             createdAt: J.date(composer["createdAt"]),
             lastUpdatedAt: J.date(composer["lastUpdatedAt"]),
             reportedContextTokens: CursorStore.reportedContext(composer),
-            bubbles: bubbles
+            bubbles: bubbles,
+            subagentIds: (composer["subagentComposerIds"] as? [String]) ?? []
         )
     }
 

@@ -194,6 +194,7 @@ final class GoldieEngine: ObservableObject {
         }
         let decided = judge.finalize(proposed, heuristic: heuristic, snapshot: snap, now: now)
         verdict = decided
+        maybeReappear(decided, now: now)
 
         if decided.speak, let text = decided.message {
             speech = Speech(text: text, thread: decided.targetThread, until: now.addingTimeInterval(90))
@@ -274,14 +275,24 @@ final class GoldieEngine: ObservableObject {
     var suggestions: [Suggestion] {
         var out: [Suggestion] = []
         let now = Date()
-        let heavy = snapshot.threads
-            .filter { Severity.of($0, config: config) >= 1 && !judge.isSnoozed($0.id, now: now) }
+        // Only chats with a clear action *right now*: stuck ones (redirect) and heavy ones waiting at a
+        // task boundary (fresh). Mid-task and idle heavy chats are shown in their rows, not nagged about.
+        let live = snapshot.threads.filter { !judge.isSnoozed($0.id, now: now) }
+        for t in live where t.advice(config: config, now: now) == .redirect {
+            var why = "\(t.toolCallsSinceUser) steps since your last message"
+            if t.maxRepeatCommand >= 3, let cmd = t.topRepeatedCommand { why = "ran `\(cmd.prefix(40))` \(t.maxRepeatCommand)× with no change" }
+            else if t.maxRepeatFileEdit >= 4, let file = t.topRepeatedFile { why = "edited \((file as NSString).lastPathComponent) \(t.maxRepeatFileEdit)×" }
+            out.append(Suggestion(id: "redirect-\(t.id)", icon: "arrow.uturn.left.circle", title: "Redirect: “\(t.title)”",
+                                  detail: "It \(why). Another lap won't help. Paste a redirect so it summarizes what it learned and proposes a different approach before running anything.",
+                                  action: .redirect(t.id)))
+        }
+        let boundary = live.filter { $0.advice(config: config, now: now) == .freshNow }
             .sorted { ($0.nextTurnCostUSD ?? 0) > ($1.nextTurnCostUSD ?? 0) }
-        for t in heavy.prefix(3) {
-            var detail = "Re-reads \(Fmt.tokens(t.contextTokens)) tokens every step"
+        for t in boundary.prefix(3) {
+            var detail = "It's waiting for you and re-reads \(Fmt.tokens(t.contextTokens)) tokens every step"
             if let step = t.nextTurnCostUSD { detail += " (~\(Fmt.usd(step))/step)" }
-            if t.contextRatio >= 2 { detail += ". A new chat would be ~\(Int(t.contextRatio.rounded()))× cheaper" }
-            out.append(Suggestion(id: "fresh-\(t.id)", icon: "sparkles", title: "Start fresh: “\(t.title)”",
+            if t.contextRatio >= 2 { detail += ". Start your next task in a fresh chat: ~\(Int(t.contextRatio.rounded()))× cheaper per step" }
+            out.append(Suggestion(id: "fresh-\(t.id)", icon: "sparkles", title: "Good moment: “\(t.title)”",
                                   detail: detail + ".", action: .startFresh(t.id)))
         }
         if !config.guards.loopGuard, let t = snapshot.threads.first(where: { $0.maxRepeatCommand >= 3 }) {
@@ -304,6 +315,7 @@ final class GoldieEngine: ObservableObject {
     func perform(_ suggestion: Suggestion) {
         switch suggestion.action {
         case .startFresh(let id): startFresh(threadID: id)
+        case .redirect(let id): copyRedirect(threadID: id)
         case .enableLoopGuard: setGuard(loop: true)
         case .enableReadGuard: setGuard(read: true)
         case .openRules(let workspace): openRules(in: workspace)
@@ -370,6 +382,65 @@ final class GoldieEngine: ObservableObject {
         let status = await CursorAutopilot.startNewChat(prompt: prompt, workspace: chat?.workspace, config: config.autopilot)
         showToast(status, seconds: 7)
     }
+
+    /// For a stuck chat, a better first move than a new chat: make the agent stop and rethink.
+    func copyRedirect(threadID: String) {
+        guard let t = snapshot.thread(threadID) else { return }
+        var what = "you've taken \(t.toolCallsSinceUser) steps since my last message"
+        if t.maxRepeatCommand >= 3, let cmd = t.topRepeatedCommand {
+            what = "you've run `\(cmd)` \(t.maxRepeatCommand) times and the result isn't changing"
+        } else if t.maxRepeatFileEdit >= 4, let file = t.topRepeatedFile {
+            what = "you've edited \((file as NSString).lastPathComponent) \(t.maxRepeatFileEdit) times"
+        }
+        let prompt = "Pause: \(what). Don't run or edit anything yet. In 5 bullets: what you've tried, what you learned, and your best hypothesis now. Then propose one different next step and wait for my OK."
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt, forType: .string)
+        CursorAutopilot.bringCursorForward(workspace: t.workspace)
+        judge.recordFeedback(thread: threadID, feedback: "copied redirect")
+        dismissedSuggestions.insert("redirect-\(threadID)")
+        expanded = false
+        showToast("Redirect copied. Paste it into “\(t.title)” (⌘V).", seconds: 6)
+    }
+
+    // MARK: Hiding
+
+    enum HideMode { case untilShown, forAnHour, untilNeeded }
+
+    /// Set by the panel controller: actually shows/hides the floating window.
+    var setPanelVisible: ((Bool) -> Void)?
+    private var hiddenUntil: Date?
+    private var hiddenUntilNeeded = false
+
+    func hide(_ mode: HideMode) {
+        expanded = false
+        hiddenUntil = mode == .forAnHour ? Date().addingTimeInterval(3600) : nil
+        hiddenUntilNeeded = mode == .untilNeeded
+        setPanelVisible?(false)
+        let hint: String
+        switch mode {
+        case .untilShown: hint = "Goldie is hidden. Bring her back from the 🐠 in the menu bar."
+        case .forAnHour: hint = "Goldie is hidden for an hour."
+        case .untilNeeded: hint = "Goldie is hidden until something needs you."
+        }
+        hiddenHint = hint
+    }
+
+    func showGoldie() {
+        hiddenUntil = nil
+        hiddenUntilNeeded = false
+        hiddenHint = nil
+        setPanelVisible?(true)
+    }
+
+    /// Called every poll: bring her back when the hour is up or something needs you.
+    private func maybeReappear(_ verdict: Verdict, now: Date) {
+        guard !panelVisible else { return }
+        if let until = hiddenUntil, now >= until { showGoldie() }
+        else if hiddenUntilNeeded, verdict.speak || verdict.mood == .alarmed { showGoldie() }
+    }
+
+    /// Hidden Goldie can't show a toast, so the menu shows why she's gone.
+    @Published private(set) var hiddenHint: String?
 
     func snooze(threadID: String) {
         judge.snooze(thread: threadID, now: Date())
@@ -462,6 +533,7 @@ func clamp01(_ x: Double) -> Double { min(1, max(0, x)) }
 struct Suggestion: Identifiable, Equatable {
     enum Action: Equatable {
         case startFresh(String)
+        case redirect(String)
         case enableLoopGuard
         case enableReadGuard
         case openRules(String)
@@ -476,6 +548,7 @@ struct Suggestion: Identifiable, Equatable {
     var actionLabel: String {
         switch action {
         case .startFresh: return "Start fresh"
+        case .redirect: return "Copy redirect"
         case .enableLoopGuard, .enableReadGuard: return "Turn on"
         case .openRules: return "Open files"
         }

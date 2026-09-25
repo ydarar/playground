@@ -56,7 +56,14 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     /// Times Goldie's guards stopped a wasteful step in this chat.
     public var guardBlocks: Int = 0
 
+    /// Cursor sub-task chats spawned by this chat; their costs roll up here.
+    public var subagentIds: [String] = []
+
     public var currentKind: TaskKind? { tasks.last?.kind }
+
+    public func advice(config: GoldieConfig, now: Date) -> ChatAdvice {
+        ChatAdvice.decide(self, config: config, now: now)
+    }
 
     /// What this chat is mostly doing: recent tasks weighted by steps (one question doesn't relabel it).
     public var dominantKind: TaskKind? {
@@ -75,6 +82,8 @@ public struct Snapshot: Codable, Equatable {
     public var takenAt: Date
     public var cursorDBFound: Bool
     public var hookEventsSeen: Bool
+    /// What a fresh chat costs to start, learned from your chats (the "N× cheaper" yardstick).
+    public var freshBaselineTokens: Int = 0
     public var todayUSD: Double? = nil
     public var monthUSD: Double? = nil
     /// Month-to-date spend extrapolated to the end of the month.
@@ -157,12 +166,13 @@ public enum Signals {
             snap.bloatLabel = biggest.filePath.map { ($0 as NSString).lastPathComponent }
                 ?? biggest.command.map { cmd in
                     let firstLine = cmd.split(separator: "\n").first.map(String.init) ?? cmd
-                    return "`" + String(firstLine.prefix(30)) + "`"
+                    return "output of `" + String(firstLine.prefix(40)) + "`"
                 }
                 ?? biggest.toolName
                 ?? "a tool result"
         }
         snap.workspace = hook?.workspace
+        snap.subagentIds = thread?.subagentIds ?? []
         snap.guardBlocks = hook?.guardBlocks ?? 0
         snap.startTokens = bubbles.first(where: { !$0.isUser && ($0.inputTokens ?? 0) > 0 })?.inputTokens
         if snap.nextTurnCostUSD != nil { snap.costSource = "config" }
@@ -201,5 +211,71 @@ public enum Signals {
     public static func normalizeCommand(_ command: String) -> String {
         let collapsed = command.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         return String(collapsed.prefix(120))
+    }
+}
+
+/// What to actually do about a chat. "Start fresh" is only right at a task boundary:
+/// mid-task a new chat re-pays to rediscover everything, and an idle chat costs nothing.
+public enum ChatAdvice: String, Codable {
+    /// Light, or nothing to do.
+    case fine
+    /// Repeating itself: redirect it (another lap won't help).
+    case redirect
+    /// Heavy and waiting for you: the right moment to start the next task fresh.
+    case freshNow
+    /// Heavy but mid-task: let it finish here; start the *next* task fresh.
+    case finishThenFresh
+    /// Heavy but idle: costs nothing until you send another message.
+    case idleHeavy
+
+    public static func decide(_ t: ThreadSnapshot, config: GoldieConfig, now: Date) -> ChatAdvice {
+        let idleMinutes = now.timeIntervalSince(t.lastActivity) / 60
+        let stuck = t.loopScore >= 0.75 || t.maxRepeatCommand >= 3 || t.maxRepeatFileEdit >= 4
+        if stuck && (t.running || idleMinutes < 15) { return .redirect }
+        guard t.contextRatio >= config.heavyRatio else { return .fine }
+        if idleMinutes > 30 { return .idleHeavy }
+        return t.running ? .finishThenFresh : .freshNow
+    }
+}
+
+/// Learns what a fresh chat really costs to start (system prompt, rules, tools and the first
+/// message) from the smallest context each new chat was seen with. Persisted between launches.
+public final class BaselineLearner {
+    private let file: URL
+    private var firstTurn: [String: Int] = [:]
+    private var dirty = false
+
+    public init(file: URL = Paths.supportDir.appendingPathComponent("baseline.json")) {
+        self.file = file
+        if let data = try? Data(contentsOf: file),
+           let saved = try? JSONDecoder().decode([String: Int].self, from: data) {
+            firstTurn = saved
+        }
+    }
+
+    /// Only chats still on their first message, with Cursor-reported context.
+    public func observe(_ t: ThreadSnapshot) {
+        guard t.userTurns == 1, t.contextSource == "reported", t.contextTokens > 0 else { return }
+        let smallest = min(firstTurn[t.id] ?? Int.max, t.contextTokens)
+        if firstTurn[t.id] != smallest {
+            firstTurn[t.id] = smallest
+            dirty = true
+        }
+    }
+
+    /// Median of recent chats, clamped to a sane range; the configured value until 3 chats are seen.
+    public func baseline(fallback: Int) -> Int {
+        let values = firstTurn.values.sorted()
+        guard values.count >= 3 else { return fallback }
+        return min(max(values[values.count / 2], fallback), fallback * 4)
+    }
+
+    public func saveIfNeeded() {
+        guard dirty else { return }
+        if firstTurn.count > 60 {  // keep the most recent-ish 60 (dictionary order is arbitrary; fine for a median)
+            firstTurn = Dictionary(uniqueKeysWithValues: firstTurn.map { ($0.key, $0.value) }.suffix(60))
+        }
+        if let data = try? JSONEncoder().encode(firstTurn) { try? data.write(to: file, options: .atomic) }
+        dirty = false
     }
 }

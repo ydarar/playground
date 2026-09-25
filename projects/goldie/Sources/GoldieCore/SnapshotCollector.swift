@@ -7,6 +7,7 @@ public final class SnapshotCollector {
     private let store: CursorStore
     private let hooks: HookTracker
     private var cache: [String: (signature: String, thread: CursorThread)] = [:]
+    private let baseline = BaselineLearner()
 
     public init(config: GoldieConfig, store: CursorStore = CursorStore(), hooks: HookTracker = HookTracker()) {
         self.config = config
@@ -16,7 +17,11 @@ public final class SnapshotCollector {
 
     public func collect(now: Date = Date()) -> Snapshot {
         hooks.poll(now: now)
-        let window = config.activeWindowMinutes * 60
+        let window = self.config.activeWindowMinutes * 60
+        // "N× cheaper than a fresh chat" uses what fresh chats really cost you, not a guess.
+        var config = self.config
+        config.freshBaselineTokens = baseline.baseline(fallback: self.config.freshBaselineTokens)
+        let subagents = store.subagentIDs(now: now)
 
         // Candidates: recently written composers, plus anything hooks saw recently.
         var candidates: [String: String] = [:]  // id → DB signature ("" = look it up)
@@ -24,7 +29,7 @@ public final class SnapshotCollector {
             if let updated = ref.updated, now.timeIntervalSince(updated) > window { continue }
             candidates[ref.id] = ref.signature
         }
-        for (id, state) in hooks.threads where now.timeIntervalSince(state.lastEventAt) <= window {
+        for (id, state) in hooks.threads where now.timeIntervalSince(state.lastEventAt) <= window && !subagents.contains(id) {
             if candidates[id] == nil { candidates[id] = "" }
         }
 
@@ -40,14 +45,18 @@ public final class SnapshotCollector {
             if now.timeIntervalSince(snap.lastActivity) <= window { threads.append(snap) }
         }
         threads.sort { $0.lastActivity > $1.lastActivity }
+        threads.forEach(baseline.observe)
+        baseline.saveIfNeeded()
 
         let parallelWindow = config.parallelWindowMinutes * 60
         let parallel = threads.filter { $0.running || now.timeIntervalSince($0.lastActivity) <= parallelWindow }.count
         cache = cache.filter { entry in threads.contains { $0.id == entry.key } }
         store.retainCache(for: Set(candidates.keys))
 
-        return Snapshot(threads: threads, parallelCount: parallel, takenAt: now,
-                        cursorDBFound: store.exists, hookEventsSeen: hooks.hasSeenEvents)
+        var snapshot = Snapshot(threads: threads, parallelCount: parallel, takenAt: now,
+                                cursorDBFound: store.exists, hookEventsSeen: hooks.hasSeenEvents)
+        snapshot.freshBaselineTokens = config.freshBaselineTokens
+        return snapshot
     }
 
     public func handoffSource(threadID: String) -> HandoffSource? {

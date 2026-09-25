@@ -50,11 +50,12 @@ public enum HeuristicBrain {
 
         var best: (thread: ThreadSnapshot, mood: Mood, message: String?, reason: String)?
         for t in snap.threads where !snoozed.contains(t.id) {
-            let a = assess(t, config: config)
+            let a = assess(t, config: config, now: snap.takenAt)
             if let current = best {
-                let better = a.mood.severity > current.mood.severity
-                    || (a.mood.severity == current.mood.severity && t.contextRatio > current.thread.contextRatio)
-                if !better { continue }
+                // Worse mood first; then something actionable (a message) over mere information; then heavier.
+                let key = (a.mood.severity, a.message == nil ? 0 : 1, t.contextRatio)
+                let currentKey = (current.mood.severity, current.message == nil ? 0 : 1, current.thread.contextRatio)
+                if !(key > currentKey) { continue }
             }
             best = (thread: t, mood: a.mood, message: a.message, reason: a.reason)
         }
@@ -62,8 +63,9 @@ public enum HeuristicBrain {
             return Verdict(mood: .working, speak: false, targetThread: nil, message: nil,
                            reason: "Only snoozed threads are active.", source: "rules")
         }
-        let nudging = winner.mood == .heavy || winner.mood == .alarmed
-        if !nudging, let projected = snap.projectedMonthUSD, projected > config.monthlyBudgetUSD * 1.05 {
+        // Only the two situations with a clear action right now get a nudge (redirect, fresh at a boundary).
+        let nudging = winner.message != nil
+        if winner.mood == .working, let projected = snap.projectedMonthUSD, projected > config.monthlyBudgetUSD * 1.05 {
             // No single chat to blame, but the month is running hot: show it, don't say it.
             return Verdict(mood: .stressed, speak: false, targetThread: nil, message: nil,
                            reason: String(format: "Chats look fine, but at this pace Cursor reaches ~$%.0f this month (budget $%.0f).",
@@ -74,29 +76,31 @@ public enum HeuristicBrain {
                        message: winner.message, reason: winner.reason, source: "rules")
     }
 
-    static func assess(_ t: ThreadSnapshot, config: GoldieConfig) -> (mood: Mood, message: String?, reason: String) {
+    static func assess(_ t: ThreadSnapshot, config: GoldieConfig, now: Date) -> (mood: Mood, message: String?, reason: String) {
         let name = "“\(t.title.clipped(40))”"
         let k = t.contextTokens / 1000
         let perStep = t.nextTurnCostUSD.map { String(format: " (~$%.2f per step)", $0) } ?? ""
         let cheaper = max(1, Int(t.contextRatio.rounded()))
-        let mode = t.maxMode ? " in Max Mode" : ""
 
-        if t.loopScore >= 0.75 {
+        switch t.advice(config: config, now: now) {
+        case .redirect:
             var why = "\(t.toolCallsSinceUser) steps since your last message"
             if t.maxRepeatCommand >= 3 { why = "ran the same command \(t.maxRepeatCommand)× in a row" }
             else if t.maxRepeatFileEdit >= 4 { why = "edited the same file \(t.maxRepeatFileEdit)×" }
-            return (.alarmed, "going in circles. fresh water?",
-                    "\(name) looks stuck: \(why), and every step re-reads \(k)k tokens\(perStep).")
+            return (.alarmed, "going in circles. redirect it?",
+                    "\(name) looks stuck: \(why). Another lap won't help. Send it a redirect (Goldie can copy one) so it rethinks before running anything.")
+        case .freshNow:
+            return (.heavy, "good moment for fresh water",
+                    "\(name) is waiting for you and re-reads \(k)k tokens every step\(perStep). Start your next task in a fresh chat: ~\(cheaper)× cheaper per step.")
+        case .finishThenFresh:
+            return (.heavy, nil,
+                    "\(name) is heavy (\(k)k tokens every step\(perStep)) but mid-task. Let it finish here, then start the next task fresh.")
+        case .idleHeavy:
+            return (.working, nil,
+                    "\(name) is heavy but idle, so it costs nothing right now. If you go back to it, start fresh instead.")
+        case .fine:
+            return (.working, nil, "\(name) is fine: \(k)k tokens per step\(perStep).")
         }
-        if t.contextRatio >= config.alarmedRatio {
-            return (.alarmed, "this bowl's murky. fresh water?",
-                    "\(name) re-reads \(k)k tokens every step\(mode)\(perStep). A new chat would be ~\(cheaper)× cheaper per step.")
-        }
-        if t.contextRatio >= config.heavyRatio || t.loopScore >= 0.5 || (t.maxMode && t.contextRatio >= config.heavyRatio * 0.75) {
-            return (.heavy, "fresh water?",
-                    "\(name) is getting long: \(k)k tokens every step\(mode)\(perStep). A new chat would be ~\(cheaper)× cheaper.")
-        }
-        return (.working, nil, "\(name) is fine: \(k)k tokens per step\(perStep).")
     }
 }
 
@@ -114,6 +118,8 @@ public struct JudgeContext {
     public var snoozed: Set<String>
     public var now: Date
     public var budgetUSD: Double = 800
+    /// Thresholds used to compute each chat's situation.
+    public var config: GoldieConfig = GoldieConfig()
     /// Your per-task history by model and kind of work (for evidence-based model advice).
     public var modelStats: [ModelStats] = []
 }
@@ -161,7 +167,7 @@ public final class Judge {
 
     public func context(for snap: Snapshot, heuristic: Verdict, now: Date) -> JudgeContext {
         JudgeContext(snapshot: snap, heuristic: heuristic, nudges: Array(nudges.suffix(6)), snoozed: snoozed(now: now), now: now,
-                     budgetUSD: config.monthlyBudgetUSD)
+                     budgetUSD: config.monthlyBudgetUSD, config: config)
     }
 
     public func finalize(_ proposed: Verdict, heuristic: Verdict, snapshot: Snapshot, now: Date) -> Verdict {

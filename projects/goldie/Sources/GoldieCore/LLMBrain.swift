@@ -34,7 +34,15 @@ public final class LLMBrain {
       more per task. Only relay the tip when the chat is doing that kind of work.
     plus a rules-based suggestion and recent nudges with the user's feedback.
 
+    Each thread has a "situation" computed from hard signals:
+    - redirect: it's repeating itself. Suggest a redirect, not a new chat.
+    - fresh_now: heavy AND waiting for the user. The right moment to start the next task in a fresh chat.
+    - finish_then_fresh: heavy but mid-task. Don't interrupt: a new chat would re-pay to rediscover everything.
+    - idle_heavy: heavy but idle, costing nothing. Don't nudge.
+    - fine: nothing to do.
+
     Decide Goldie's mood and whether it should speak. Guidance:
+    - Only speak for redirect or fresh_now situations.
     - Stay quiet unless acting now clearly saves money. Silence is the default.
     - A thread still converging (few repeats, recently asked by the user) can run a bit longer.
     - Circling (same command or file again and again) or a very high context_ratio: nudge to start fresh.
@@ -89,6 +97,7 @@ public final class LLMBrain {
                 "running": t.running,
                 "minutes_idle": Int(ctx.now.timeIntervalSince(t.lastActivity) / 60),
                 "snoozed": ctx.snoozed.contains(t.id),
+                "situation": Self.situationName(t.advice(config: ctx.config, now: ctx.now)),
             ]
             if let cost = t.nextTurnCostUSD { d["cost_per_step_usd"] = (cost * 1000).rounded() / 1000 }
             if let spent = t.spentUSD { d["spent_usd"] = (spent * 100).rounded() / 100 }
@@ -126,6 +135,16 @@ public final class LLMBrain {
         root["budget_usd"] = ctx.budgetUSD
         let data = (try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])) ?? Data()
         return (String(data: data, encoding: .utf8) ?? "{}", idMap)
+    }
+
+    static func situationName(_ advice: ChatAdvice) -> String {
+        switch advice {
+        case .fine: return "fine"
+        case .redirect: return "redirect"
+        case .freshNow: return "fresh_now"
+        case .finishThenFresh: return "finish_then_fresh"
+        case .idleHeavy: return "idle_heavy"
+        }
     }
 
     // MARK: Handoff

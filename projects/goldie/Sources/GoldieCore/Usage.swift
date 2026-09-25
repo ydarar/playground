@@ -15,6 +15,8 @@ public struct UsageEvent: Codable, Hashable {
     public var chargeable: Bool = true
     public var chargedCents: Double? = nil
     public var discountPercent: Double? = nil
+    /// Price before discounts (`tokenUsage.totalCents`).
+    public var listCents: Double? = nil
 
     public var totalTokens: Int { inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens }
 }
@@ -140,7 +142,11 @@ public final class CursorUsageClient {
         return list.compactMap { e -> UsageEvent? in
             guard let at = J.date(e["timestamp"]) else { return nil }
             let usage = e["tokenUsage"] as? [String: Any] ?? [:]
-            let cents = J.number(usage["totalCents"]) ?? J.number(e["totalCents"]) ?? dollars(e["usageBasedCosts"]).map { $0 * 100 } ?? 0
+            // What you're actually charged: `chargedCents` (after the enterprise discount). It matched the
+            // cursor.com Usage total within 0.2% in testing; the list price `totalCents` was ~7% high.
+            let listCents = J.number(usage["totalCents"]) ?? J.number(e["totalCents"]) ?? dollars(e["usageBasedCosts"]).map { $0 * 100 } ?? 0
+            let discount = J.number(usage["enterpriseUsageDiscountPercent"]) ?? 0
+            let cents = J.number(e["chargedCents"]) ?? listCents * (1 - discount / 100)
             var event = UsageEvent(
                 at: at,
                 model: (e["model"] as? String) ?? "unknown",
@@ -154,6 +160,7 @@ public final class CursorUsageClient {
             event.chargeable = (e["isChargeable"] as? Bool) ?? true
             event.chargedCents = J.number(e["chargedCents"])
             event.discountPercent = J.number(usage["enterpriseUsageDiscountPercent"])
+            event.listCents = listCents
             return event
         }
     }
@@ -221,10 +228,15 @@ public enum CostModel {
     /// thread with the nearest activity timestamp (within tolerance).
     static func attribute(_ events: [UsageEvent], to threads: [ThreadSnapshot], tolerance: Double) -> [String: [UsageEvent]] {
         var out: [String: [UsageEvent]] = [:]
-        let ids = Set(threads.map(\.id))
+        // A chat owns its own requests and those of the sub-task chats it spawned.
+        var owner: [String: String] = [:]
+        for t in threads {
+            owner[t.id] = t.id
+            for sub in t.subagentIds { owner[sub] = t.id }
+        }
         for e in events {
             if let conversation = e.conversationId, !conversation.isEmpty {
-                if ids.contains(conversation) { out[conversation, default: []].append(e) }
+                if let chat = owner[conversation] { out[chat, default: []].append(e) }
                 continue  // belongs to a chat Goldie isn't watching: never guess by time
             }
             var best: (id: String, distance: Double)?
@@ -274,9 +286,10 @@ public enum UsageDiagnostics {
     /// Candidate month totals, to compare with cursor.com → Usage (refresh it first, month-to-date).
     static func reconciliation(_ events: [UsageEvent], now: Date) -> [String] {
         func usd(_ cents: Double) -> String { String(format: "$%.2f", cents / 100) }
-        let raw = events.reduce(0) { $0 + $1.cents }
-        let discounted = events.reduce(0) { $0 + $1.cents * (1 - ($1.discountPercent ?? 0) / 100) }
-        let chargeableOnly = events.filter(\.chargeable).reduce(0) { $0 + $1.cents }
+        let shown = events.reduce(0) { $0 + $1.cents }
+        let raw = events.reduce(0) { $0 + ($1.listCents ?? $1.cents) }
+        let discounted = events.reduce(0) { $0 + ($1.listCents ?? $1.cents) * (1 - ($1.discountPercent ?? 0) / 100) }
+        let chargeableOnly = events.filter(\.chargeable).reduce(0) { $0 + ($1.listCents ?? $1.cents) }
         let charged = events.compactMap(\.chargedCents)
         let discounts = Set(events.compactMap(\.discountPercent).map { String(format: "%.2f%%", $0) }).sorted()
         let utcStart: Date = {
@@ -286,7 +299,8 @@ public enum UsageDiagnostics {
         }()
         let fromUTC = events.filter { $0.at >= utcStart }.reduce(0) { $0 + $1.cents }
         var lines = ["", "# Month total candidates (which one matches cursor.com → Usage, refreshed just now?)"]
-        lines.append("  A raw totalCents (what Goldie shows now):   \(usd(raw))")
+        lines.append("  Goldie shows (chargedCents, else discounted list price): \(usd(shown))")
+        lines.append("  A raw totalCents (list price):              \(usd(raw))")
         lines.append("  B after enterpriseUsageDiscountPercent:     \(usd(discounted))   discount values seen: \(discounts.isEmpty ? "none" : discounts.joined(separator: ", "))")
         lines.append("  C chargeable events only:                   \(usd(chargeableOnly))   (\(events.filter { !$0.chargeable }.count) not chargeable)")
         lines.append("  D sum of chargedCents:                      \(charged.isEmpty ? "n/a" : usd(charged.reduce(0, +)))   (\(charged.count) events have it)")

@@ -49,9 +49,10 @@ struct MenuContent: View {
             Text("Today \(Fmt.usd(engine.snapshot.todayUSD)) · this month \(Fmt.usd(engine.snapshot.monthUSD))")
             Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
             Text("Cursor costs: \(engine.usageStatus)")
+            if let hint = engine.hiddenHint { Text(hint) }
         }
         Divider()
-        Button("Show / hide Goldie") { togglePanel() }
+        Button(engine.panelVisible ? "Hide Goldie" : "Show Goldie") { togglePanel() }
         Picker("Size", selection: $engine.bowlSize) {
             Text("Small").tag(130.0)
             Text("Medium").tag(170.0)
@@ -111,6 +112,12 @@ final class PanelController {
         }
         Self.clampAndSave(panel)
         panel.orderFrontRegardless()
+        engine.setPanelVisible = { [weak self] visible in self?.setVisible(visible) }
+    }
+
+    func setVisible(_ visible: Bool) {
+        if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
+        engine.panelVisible = panel.isVisible
     }
 
     /// Keep the whole panel on screen (so the details card never opens off-screen) and remember the spot.
@@ -125,8 +132,7 @@ final class PanelController {
     }
 
     func toggle() {
-        if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
-        engine.panelVisible = panel.isVisible
+        if panel.isVisible { engine.hide(.untilShown) } else { engine.showGoldie() }
     }
 }
 

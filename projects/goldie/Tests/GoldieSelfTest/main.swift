@@ -42,6 +42,10 @@ let tests: [(String, () throws -> Void)] = [
     ("testBigReadIgnoresScreenshots", suite.testBigReadIgnoresScreenshots),
     ("testProbeHidesPathLikeKeys", suite.testProbeHidesPathLikeKeys),
     ("testLedgerKeepsNewestCopyOfARefetchedEvent", suite.testLedgerKeepsNewestCopyOfARefetchedEvent),
+    ("testAdviceDependsOnTheSituation", suite.testAdviceDependsOnTheSituation),
+    ("testBaselineIsLearnedFromFirstMessages", suite.testBaselineIsLearnedFromFirstMessages),
+    ("testSubagentCostsRollUpToTheParentChat", suite.testSubagentCostsRollUpToTheParentChat),
+    ("testShellOutputLabelSaysWhatItIs", suite.testShellOutputLabelSaysWhatItIs),
 ]
 
 var failedTests = 0

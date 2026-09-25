@@ -97,6 +97,16 @@ Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
 
 Autopilot needs macOS **Accessibility** permission. Grant it to Goldie, or to the Terminal you launch it from. Without it, Start fresh falls back to copying the prompt and bringing Cursor forward. Turn off "Send new chats automatically" in the menu bar if you'd rather press Enter yourself.
 
+**Guidance by situation, not just size.** A heavy chat isn't automatically "start fresh":
+- **✨ Heavy and waiting for you (task boundary):** the right moment to start the *next* task fresh. Goldie nudges.
+- **↩︎ Stuck (same command or edit repeated):** **Copy redirect** makes the agent stop, summarize and rethink. Usually better than a new chat. Goldie nudges.
+- **⏳ Heavy but mid-task:** let it finish. A new chat would re-pay to rediscover everything. Shown, not nagged.
+- **💤 Heavy but idle:** it costs nothing until you send another message. Shown, not nagged.
+
+"Heavy" is measured against what a fresh chat really costs you. Goldie learns that from your chats' first messages (`baseline.json`) instead of assuming 15k tokens.
+
+**Hiding.** Use the 👁 button in the card, or right-click the bowl: *Hide until something needs me*, *Hide for 1 hour*, or *Hide*. The menu bar can always bring her back.
+
 **Suggestions.** The orange number on the bowl counts them:
 - start fresh for heavy chats;
 - turn on a guard when Goldie saw the problem happen;

@@ -55,10 +55,15 @@ struct BowlView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 30 fps is plenty for a pet; 8 fps asleep; 6 fps with Reduce Motion; nothing while hidden.
+    /// Frame rate by mood: a calm pet doesn't need 30 fps. Nothing while hidden; 6 fps with Reduce Motion.
     private var frameInterval: Double {
         if reduceMotion { return 1.0 / 6 }
-        return state.mood == .sleeping ? 1.0 / 8 : 1.0 / 30
+        switch state.mood {
+        case .sleeping: return 1.0 / 6
+        case .working, .stressed: return 1.0 / 15
+        case .heavy: return 1.0 / 12
+        case .alarmed, .celebrating: return 1.0 / 24
+        }
     }
 
     var body: some View {
@@ -77,6 +82,7 @@ struct BowlView: View {
                     GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size, hovering: hovering)
                 }
                 .clipShape(Circle())
+                .drawingGroup()  // render the scene in one GPU pass instead of many CPU-composited layers
                 // glass
                 Circle().strokeBorder(
                     LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -90,11 +96,11 @@ struct BowlView: View {
                     .offset(y: -size * 0.46)
             }
             .frame(width: size, height: size)
-            .background(alignment: .bottom) {  // grounds the bowl on the desk
+            .background(alignment: .bottom) {  // grounds the bowl on the desk (gradient, not a live blur)
                 Ellipse()
-                    .fill(Color.black.opacity(0.28))
-                    .frame(width: size * 0.62, height: size * 0.07)
-                    .blur(radius: 4)
+                    .fill(RadialGradient(colors: [Color.black.opacity(0.3), Color.black.opacity(0)],
+                                         center: .center, startRadius: 0, endRadius: size * 0.32))
+                    .frame(width: size * 0.7, height: size * 0.09)
                     .offset(y: size * 0.03)
             }
             .contentShape(Circle())
