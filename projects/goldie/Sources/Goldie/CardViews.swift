@@ -28,13 +28,15 @@ struct GoldieRootView: View {
                 PeekView(engine: engine)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                if let target = engine.focusThread {
-                    FreshBowl(paused: !engine.panelVisible, title: engine.snapshot.thread(target)?.title)
-                        .onTapGesture { engine.copyHandoff(threadID: target) }
-                        .help("Start fresh: copies a handoff prompt, then brings Cursor forward so you can paste it into a new chat")
-                        .transition(.scale.combined(with: .opacity))
-                }
-                BowlView(state: engine.bowl, paused: !engine.panelVisible, size: CGFloat(engine.bowlSize))
+                BowlView(state: engine.bowl, paused: !engine.panelVisible, size: CGFloat(engine.bowlSize), hovering: hovering)
+                    .overlay(alignment: .topTrailing) {
+                        let count = engine.suggestions.count
+                        if count > 0 {
+                            SuggestionBadge(count: count)
+                                .offset(x: -6, y: 6)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
                     .gesture(
                         DragGesture(minimumDistance: 3)
                             .onChanged { _ in mover.drag() }
@@ -44,11 +46,12 @@ struct GoldieRootView: View {
                         withAnimation(.spring(response: 0.3)) { engine.expanded.toggle() }
                     }
                     .onHover { hovering = $0 }
+                    .help(engine.suggestions.isEmpty ? "Click for details · drag to move" : "Goldie has suggestions: click to see them")
             }
         }
         .padding(10)
         .frame(width: PanelController.size.width, height: PanelController.size.height, alignment: .bottomTrailing)
-        .animation(.easeInOut(duration: 0.25), value: engine.focusThread)
+        .animation(.easeInOut(duration: 0.25), value: engine.suggestions.count)
         .animation(.easeInOut(duration: 0.25), value: engine.speech)
         .animation(.easeInOut(duration: 0.15), value: hovering)
     }
@@ -159,6 +162,7 @@ struct DetailsCard: View {
             if engine.needsSetup { SetupChecklist(engine: engine) }
             BudgetSection(snapshot: engine.snapshot, budget: engine.config.monthlyBudgetUSD, usageStatus: engine.usageStatus)
             goldieSays
+            if !engine.suggestions.isEmpty { SuggestionsSection(engine: engine) }
             threadList
             TipsSection(engine: engine)
             footer
@@ -192,7 +196,7 @@ struct DetailsCard: View {
         }
     }
 
-    /// Goldie's verdict in one sentence, plus the one action that matters.
+    /// Goldie's verdict in one sentence, plus a Start fresh for a chat you selected.
     private var goldieSays: some View {
         HStack(alignment: .top, spacing: 8) {
             Text("🐠")
@@ -200,31 +204,21 @@ struct DetailsCard: View {
                 Text(engine.verdict.reason)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                if let selected = engine.selectedThread, selected != engine.nudgeTarget,
-                   let chat = engine.snapshot.thread(selected) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Selected: “\(chat.title)”").font(.caption.weight(.semibold)).lineLimit(1)
-                        Button("Start fresh for this chat") { engine.copyHandoff(threadID: selected) }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .tint(.orange)
-                    }
-                } else if let target = engine.nudgeTarget {
+                if let selected = engine.selectedThread, let chat = engine.snapshot.thread(selected) {
                     HStack(spacing: 10) {
-                        Button("Start fresh") { engine.copyHandoff(threadID: target) }
+                        Text("Selected: “\(chat.title)”").font(.caption.weight(.semibold)).lineLimit(1)
+                        Spacer()
+                        Button("Start fresh") { engine.startFresh(threadID: selected) }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .tint(.orange)
-                            .help("Copies a handoff prompt and brings Cursor forward. Paste it into a new chat.")
-                        Button("Not now") { engine.snooze(threadID: target) }
-                            .help("Goldie won't nudge about this chat for \(Int(engine.config.snoozeMinutes)) minutes")
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                        Button("Not helpful") { engine.notHelpful() }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                }
+                if engine.verdict.targetThread != nil || engine.verdict.mood == .alarmed {
+                    Button("Not helpful") { engine.notHelpful() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -435,12 +429,12 @@ struct ThreadRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if isSelected {
-                    Button("Start fresh") { engine.copyHandoff(threadID: thread.id) }
+                    Button("Start fresh") { engine.startFresh(threadID: thread.id) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .tint(.orange)
                 } else {
-                    Button("Start fresh") { engine.copyHandoff(threadID: thread.id) }
+                    Button("Start fresh") { engine.startFresh(threadID: thread.id) }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
@@ -548,8 +542,9 @@ struct Legend: View {
             item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side.")
             item("📄 Big reads", "One huge file or log in a chat is re-sent on every later step. Asking for just the lines you need keeps chats light.")
             item("Budget bar & water level", "Month spend vs your budget. The tick shows where even spending would put you today. Goldie's water drains as you spend.")
-            item("Start fresh", "Copies a handoff (goal, files, where things stand) and brings Cursor forward. Paste it into a new chat.")
-            item("Selecting a chat", "Click any chat to point the fresh bowl and Start fresh at it. Without a selection they follow Goldie's pick.")
+            item("Start fresh", "Goldie writes a handoff doc (goal, files, where things stand) to .goldie/handoffs/ in that repo (kept out of git), opens a new Cursor chat that points at it, and sends it.")
+            item("Suggestions & Fix all", "The number on Goldie's bowl. Each one has its own button; Fix all turns on suggested guards and starts fresh chats one by one (up to 3).")
+            item("Guards", "Loop guard stops a command repeated with no code change in between. Big-read guard makes the agent search large files first; asking again is allowed. Both are opt-in (menu bar).")
         }
         .font(.caption)
         .padding(10)
@@ -620,5 +615,62 @@ struct ModelScorecard: View {
         let mark = best && s.count >= ModelFit.minTasks ? "✓ " : "   "
         return mark + String(format: "%@: $%.2f/task · %ld tasks · %.0f%% redone · ~%ld steps",
                              s.model, s.costPerGoodTaskUSD, s.count, s.troubleRate * 100, s.medianSteps)
+    }
+}
+
+/// Orange count on the bowl: how many things Goldie would fix.
+struct SuggestionBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(Circle().fill(Color.orange))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: 2))
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+    }
+}
+
+struct SuggestionsSection: View {
+    @ObservedObject var engine: GoldieEngine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Goldie's suggestions").font(.caption.weight(.semibold))
+                Spacer()
+                Button("Fix all") { engine.fixAll() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                    .help("Turns on suggested guards, then starts fresh chats one at a time (up to 3)")
+            }
+            ForEach(engine.suggestions) { suggestion in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: suggestion.icon)
+                        .foregroundStyle(.orange)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(suggestion.title).font(.caption.weight(.semibold)).lineLimit(1)
+                        Text(suggestion.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 12) {
+                            Button(suggestion.actionLabel) { engine.perform(suggestion) }
+                            Button("Dismiss") { engine.dismiss(suggestion) }
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.10)))
     }
 }

@@ -19,13 +19,16 @@ let command = args.isEmpty ? "help" : args.removeFirst()
 switch command {
 case "hook":
     // Must be fast and must never fail loudly: Cursor waits on this process.
+    // Guard events get an allow/deny answer; everything else gets "{}".
     let input = FileHandle.standardInput.readDataToEndOfFile()
-    HookRecorder.record(stdin: input, eventArg: args.first)
-    FileHandle.standardOutput.write(Data("{}\n".utf8))
+    let reply = HookRecorder.handle(stdin: input, eventArg: args.first)
+    FileHandle.standardOutput.write(Data((reply + "\n").utf8))
 
 case "install-cursor-hooks":
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
-    do { print(try CursorHooksInstaller.install(executable: exe)) } catch { print("error: \(error)"); exit(1) }
+    let guards = GoldieConfig.load().guards
+    do { print(try CursorHooksInstaller.install(executable: exe, guards: guards.loopGuard || guards.readGuard)) }
+    catch { print("error: \(error)"); exit(1) }
 
 case "uninstall-cursor-hooks":
     do { print(try CursorHooksInstaller.uninstall()) } catch { print("error: \(error)"); exit(1) }

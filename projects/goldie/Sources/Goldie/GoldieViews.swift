@@ -50,6 +50,8 @@ struct BowlView: View {
     let state: BowlState
     let paused: Bool
     var size: CGFloat = 170
+    /// Goldie wiggles a little when you hover.
+    var hovering: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -66,9 +68,13 @@ struct BowlView: View {
                 ZStack {
                     Circle().fill(Color.white.opacity(0.10))
                     Water(level: state.waterLevel, murk: state.murk, size: size)
+                    sand
+                    plant(t)
+                    // Murk = drifting specks (a heavy chat), not green water.
+                    ForEach(0..<speckCount, id: \.self) { i in speck(i, t) }
                     ForEach(0..<4, id: \.self) { i in bubble(i, t) }
                     ForEach(0..<state.fryCount, id: \.self) { i in fry(i, t) }
-                    GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size)
+                    GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size, hovering: hovering)
                 }
                 .clipShape(Circle())
                 // glass
@@ -84,8 +90,57 @@ struct BowlView: View {
                     .offset(y: -size * 0.46)
             }
             .frame(width: size, height: size)
+            .background(alignment: .bottom) {  // grounds the bowl on the desk
+                Ellipse()
+                    .fill(Color.black.opacity(0.28))
+                    .frame(width: size * 0.62, height: size * 0.07)
+                    .blur(radius: 4)
+                    .offset(y: size * 0.03)
+            }
             .contentShape(Circle())
         }
+    }
+
+    private var speckCount: Int { Int((clamp01(state.murk) * 16).rounded()) }
+
+    /// Fixed pseudo-random spots so specks don't jump around between frames.
+    private func speck(_ i: Int, _ t: Double) -> some View {
+        let rx = abs(sin(Double(i) * 12.9898) * 43758.5453).truncatingRemainder(dividingBy: 1)
+        let ry = abs(sin(Double(i) * 78.233) * 12345.678).truncatingRemainder(dividingBy: 1)
+        let x = CGFloat(rx - 0.5) * size * 0.72 + CGFloat(sin(t * 0.25 + Double(i))) * 4
+        let y = CGFloat(ry * 0.6 - 0.15) * size + CGFloat(cos(t * 0.2 + Double(i) * 1.3)) * 3
+        let d = CGFloat(2 + i % 3)
+        return Circle()
+            .fill(Color(red: 0.45, green: 0.42, blue: 0.28).opacity(0.55))
+            .frame(width: d, height: d)
+            .offset(x: x, y: y)
+    }
+
+    private var sand: some View {
+        ZStack {
+            Ellipse()
+                .fill(LinearGradient(colors: [Color(red: 0.93, green: 0.84, blue: 0.64), Color(red: 0.82, green: 0.70, blue: 0.50)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: size * 0.95, height: size * 0.26)
+                .offset(y: size * 0.44)
+            Ellipse().fill(Color.gray.opacity(0.55)).frame(width: 9, height: 6).offset(x: size * 0.12, y: size * 0.36)
+            Ellipse().fill(Color(red: 0.55, green: 0.5, blue: 0.6).opacity(0.6)).frame(width: 7, height: 5).offset(x: size * 0.2, y: size * 0.38)
+            Ellipse().fill(Color.white.opacity(0.5)).frame(width: 6, height: 4).offset(x: -size * 0.05, y: size * 0.39)
+        }
+    }
+
+    private func plant(_ t: Double) -> some View {
+        let green = Color(red: 0.24, green: 0.62, blue: 0.36)
+        return ZStack(alignment: .bottom) {
+            Capsule().fill(green)
+                .frame(width: 6, height: size * 0.22)
+                .rotationEffect(.degrees(sin(t * 0.8) * 6 - 8), anchor: .bottom)
+            Capsule().fill(green.opacity(0.85))
+                .frame(width: 5, height: size * 0.16)
+                .rotationEffect(.degrees(sin(t * 0.9 + 1) * 7 + 14), anchor: .bottom)
+        }
+        .frame(width: 30, height: size * 0.24, alignment: .bottom)
+        .offset(x: -size * 0.27, y: size * 0.24)
     }
 
     private func bubble(_ i: Int, _ t: Double) -> some View {
@@ -120,13 +175,17 @@ struct Water: View {
     let size: CGFloat
 
     var body: some View {
+        // Stays water-colored when murky (a slight grey-teal), the specks carry the "dirty" signal.
         let m = clamp01(murk)
-        let color = Color(red: 0.55 + (0.42 - 0.55) * m, green: 0.82 + (0.52 - 0.82) * m, blue: 0.98 + (0.26 - 0.98) * m)
+        let color = Color(red: 0.56 + (0.52 - 0.56) * m, green: 0.82 + (0.72 - 0.82) * m, blue: 0.97 + (0.74 - 0.97) * m)
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             Rectangle()
-                .fill(LinearGradient(colors: [color.opacity(0.55 + 0.2 * m), color.opacity(0.8 + 0.15 * m)],
+                .fill(LinearGradient(colors: [color.opacity(0.5 + 0.1 * m), color.opacity(0.75 + 0.1 * m)],
                                      startPoint: .top, endPoint: .bottom))
+                .overlay(alignment: .top) {  // water surface
+                    Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1.5)
+                }
                 .frame(height: size * CGFloat(0.8 * clamp01(level)))
         }
         .frame(width: size, height: size)
@@ -142,13 +201,17 @@ struct GoldieFish: View {
     let puff: CGFloat
     let t: Double
     let bowl: CGFloat
+    var hovering: Bool = false
+
+    /// A quick blink every few seconds keeps her alive.
+    private var blinking: Bool { t.truncatingRemainder(dividingBy: 4.7) < 0.14 }
 
     var body: some View {
         let m = motion()
-        FishBody(eyesClosed: mood == .sleeping, worried: mood == .alarmed || mood == .stressed, t: t)
+        FishBody(eyesClosed: mood == .sleeping || blinking, worried: mood == .alarmed || mood == .stressed, t: t)
             .scaleEffect(x: m.facingRight ? 1 : -1, y: 1)
-            .scaleEffect(puff * bowl / 310)
-            .rotationEffect(.degrees(m.tilt))
+            .scaleEffect(puff * bowl / 330)
+            .rotationEffect(.degrees(m.tilt + (hovering ? sin(t * 14) * 5 : 0)))
             .offset(x: m.x, y: m.y)
     }
 
@@ -253,51 +316,5 @@ struct TailShape: Shape {
         p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.midY), control: CGPoint(x: r.midX, y: r.maxY - r.height * 0.15))
         p.closeSubpath()
         return p
-    }
-}
-
-// MARK: - Nudge pieces
-
-/// The silent nudge: an empty bowl of clean water. Click = copy handoff.
-struct FreshBowl: View {
-    let paused: Bool
-    /// The chat this fresh start is for, so it's never ambiguous.
-    let title: String?
-
-    private var label: String {
-        guard let title, !title.isEmpty else { return "this chat?" }
-        let short = title.count > 22 ? String(title.prefix(21)) + "…" : title
-        return "“" + short + "”?"
-    }
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: paused)) { timeline in
-            let pulse = 1 + 0.04 * CGFloat(sin(timeline.date.timeIntervalSinceReferenceDate * 3))
-            VStack(spacing: 4) {
-                ZStack {
-                    Circle().fill(Color.white.opacity(0.10))
-                    Water(level: 0.95, murk: 0, size: 64)
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Circle().strokeBorder(Color.white.opacity(0.8), lineWidth: 2)
-                }
-                .frame(width: 64, height: 64)
-                .scaleEffect(pulse)
-                VStack(spacing: 1) {
-                    Text("fresh water for")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .opacity(0.8)
-                    Text(label)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.65)))
-                .frame(maxWidth: 150)
-            }
-            .contentShape(Rectangle())
-        }
     }
 }

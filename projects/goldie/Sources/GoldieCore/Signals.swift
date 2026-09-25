@@ -46,7 +46,21 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     /// Context size of the very first request: what a chat costs before you've typed anything.
     public var startTokens: Int? = nil
 
+    /// Folder the chat works in (from Cursor hooks); handoff docs are written there.
+    public var workspace: String? = nil
+    /// Times Goldie's guards stopped a wasteful step in this chat.
+    public var guardBlocks: Int = 0
+
     public var currentKind: TaskKind? { tasks.last?.kind }
+
+    /// What this chat is mostly doing: recent tasks weighted by steps (one question doesn't relabel it).
+    public var dominantKind: TaskKind? {
+        let recent = tasks.suffix(5)
+        guard !recent.isEmpty else { return nil }
+        var weight: [TaskKind: Int] = [:]
+        for t in recent { weight[t.kind, default: 0] += max(1, t.steps) }
+        return weight.max { $0.value < $1.value }?.key
+    }
 }
 
 public struct Snapshot: Codable, Equatable {
@@ -131,13 +145,19 @@ public enum Signals {
         snap.topRepeatedFile = maxFile >= 2 ? topFile?.key : nil
         snap.activityTimes = activity
         snap.tasks = TaskSegmenter.segments(threadID: id, model: model, bubbles: bubbles, running: running, now: now)
-        if let biggest = bubbles.filter(\.isTool).max(by: { $0.textLength < $1.textLength }), biggest.textLength >= 40_000 {
-            snap.bloatTokens = biggest.textLength / 4
+        // Measure the tool *result* only (not args, attachments or internal copies of the message).
+        if let biggest = bubbles.filter(\.isTool).max(by: { $0.resultLength < $1.resultLength }), biggest.resultLength >= 40_000 {
+            snap.bloatTokens = biggest.resultLength / 4
             snap.bloatLabel = biggest.filePath.map { ($0 as NSString).lastPathComponent }
-                ?? biggest.command.map { "`" + String($0.prefix(30)) + "`" }
+                ?? biggest.command.map { cmd in
+                    let firstLine = cmd.split(separator: "\n").first.map(String.init) ?? cmd
+                    return "`" + String(firstLine.prefix(30)) + "`"
+                }
                 ?? biggest.toolName
                 ?? "a tool result"
         }
+        snap.workspace = hook?.workspace
+        snap.guardBlocks = hook?.guardBlocks ?? 0
         snap.startTokens = bubbles.first(where: { !$0.isUser && ($0.inputTokens ?? 0) > 0 })?.inputTokens
         if snap.nextTurnCostUSD != nil { snap.costSource = "config" }
         return snap

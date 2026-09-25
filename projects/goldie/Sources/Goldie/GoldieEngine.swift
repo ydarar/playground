@@ -46,7 +46,7 @@ final class GoldieEngine: ObservableObject {
         return v >= 100 ? v : 170
     }
 
-    let config: GoldieConfig
+    private(set) var config: GoldieConfig
     private let collector: SnapshotCollector
     private let judge: Judge
     private let llm: LLMBrain?
@@ -66,6 +66,9 @@ final class GoldieEngine: ObservableObject {
     /// Account-wide advice (e.g. every chat starts heavy because of rules/MCP setup).
     @Published private(set) var setupTip: String?
     private var startTokensSeen: [String: Int] = [:]
+    /// Suggestions you closed this session.
+    @Published private(set) var dismissedSuggestions: Set<String> = []
+    private var guardBlocksSeen: [String: Int] = [:]
 
     /// Collector output before costs are attached.
     private var rawSnapshot = Snapshot.empty
@@ -132,7 +135,8 @@ final class GoldieEngine: ObservableObject {
     /// Menu bar text: today's spend once known.
     var menuTitle: String {
         guard let today = snapshot.todayUSD else { return "🐠" }
-        return "🐠 " + Fmt.usd(today) + (nudgeTarget != nil ? " •" : "")
+        let count = suggestions.count
+        return "🐠 " + Fmt.usd(today) + (count > 0 ? " • \(count)" : "")
     }
 
     /// Show the setup checklist until the basics work.
@@ -236,6 +240,11 @@ final class GoldieEngine: ObservableObject {
         for t in snap.threads { if let s = t.startTokens { startTokensSeen[t.id] = s } }
         let tip = computeSetupTip(now: now)
         if tip != setupTip { setupTip = tip }
+        // Tell the user when a guard just saved a wasted step.
+        for t in snap.threads where t.guardBlocks > (guardBlocksSeen[t.id] ?? 0) {
+            if guardBlocksSeen[t.id] != nil { showToast("🛡 Goldie stopped a wasted step in “\(t.title)”.", seconds: 5) }
+            guardBlocksSeen[t.id] = t.guardBlocks
+        }
     }
 
     /// If chats typically start heavy, the fix is in setup (rules, AGENTS.md, MCP tools), not in any one chat.
@@ -257,38 +266,113 @@ final class GoldieEngine: ObservableObject {
         taskStore.save(now: Date())
     }
 
-    // MARK: Actions
+    // MARK: Suggestions
 
-    func copyHandoff(threadID: String) {
-        showToast("writing handoff…", seconds: 30)
-        let collector = self.collector
-        queue.async {
-            let source = collector.handoffSource(threadID: threadID)
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let source else {
-                    self.showToast("couldn't read that thread")
-                    return
+    /// Everything Goldie would fix right now, most valuable first. Shown behind the badge on her bowl.
+    var suggestions: [Suggestion] {
+        var out: [Suggestion] = []
+        let now = Date()
+        let heavy = snapshot.threads
+            .filter { Severity.of($0, config: config) >= 1 && !judge.isSnoozed($0.id, now: now) }
+            .sorted { ($0.nextTurnCostUSD ?? 0) > ($1.nextTurnCostUSD ?? 0) }
+        for t in heavy.prefix(3) {
+            var detail = "Re-reads \(Fmt.tokens(t.contextTokens)) tokens every step"
+            if let step = t.nextTurnCostUSD { detail += " (~\(Fmt.usd(step))/step)" }
+            if t.contextRatio >= 2 { detail += ". A new chat would be ~\(Int(t.contextRatio.rounded()))× cheaper" }
+            out.append(Suggestion(id: "fresh-\(t.id)", icon: "sparkles", title: "Start fresh: “\(t.title)”",
+                                  detail: detail + ".", action: .startFresh(t.id)))
+        }
+        if !config.guards.loopGuard, let t = snapshot.threads.first(where: { $0.maxRepeatCommand >= 3 }) {
+            out.append(Suggestion(id: "loop-guard", icon: "arrow.triangle.2.circlepath", title: "Turn on Loop guard",
+                                  detail: "“\(t.title)” re-ran the same command \(t.maxRepeatCommand)×. Loop guard stops the next identical run when no code changed in between, and tells the agent to change approach.",
+                                  action: .enableLoopGuard))
+        }
+        if !config.guards.readGuard, let t = snapshot.threads.first(where: { $0.bloatTokens >= 10_000 }) {
+            out.append(Suggestion(id: "read-guard", icon: "doc.text.magnifyingglass", title: "Turn on Big-read guard",
+                                  detail: "“\(t.title)” pulled ~\(Fmt.tokens(t.bloatTokens)) tokens from one read, which is now re-sent every step. Big-read guard makes the agent search large files first (it can still ask again).",
+                                  action: .enableReadGuard))
+        }
+        if let tip = setupTip, let workspace = snapshot.threads.compactMap(\.workspace).first {
+            out.append(Suggestion(id: "setup", icon: "gearshape", title: "Trim what every chat starts with",
+                                  detail: tip, action: .openRules(workspace)))
+        }
+        return out.filter { !dismissedSuggestions.contains($0.id) }
+    }
+
+    func perform(_ suggestion: Suggestion) {
+        switch suggestion.action {
+        case .startFresh(let id): startFresh(threadID: id)
+        case .enableLoopGuard: setGuard(loop: true)
+        case .enableReadGuard: setGuard(read: true)
+        case .openRules(let workspace): openRules(in: workspace)
+        }
+    }
+
+    func dismiss(_ suggestion: Suggestion) {
+        dismissedSuggestions.insert(suggestion.id)
+        if case .startFresh(let id) = suggestion.action { judge.snooze(thread: id, now: Date()) }
+    }
+
+    /// Turns on suggested guards, then starts fresh chats one at a time (at most 3).
+    func fixAll() {
+        let items = suggestions
+        expanded = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for s in items {
+                switch s.action {
+                case .enableLoopGuard: self.setGuard(loop: true)
+                case .enableReadGuard: self.setGuard(read: true)
+                default: break
                 }
-                var text = Handoff.draft(source)
-                if let llm = self.llm, self.llmHealthy, let refined = await llm.refineHandoff(text) {
-                    text = refined
+            }
+            for s in items {
+                if case .startFresh(let id) = s.action {
+                    await self.startFreshNow(threadID: id)
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
                 }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                self.judge.recordFeedback(thread: threadID, feedback: "copied handoff")
-                self.speech = nil
-                self.expanded = false
-                self.showToast("Handoff copied. In Cursor: start a new chat and paste (⌘V).", seconds: 6)
-                Self.bringCursorForward()
             }
         }
+    }
+
+    // MARK: Actions
+
+    func startFresh(threadID: String) {
+        Task { @MainActor [weak self] in await self?.startFreshNow(threadID: threadID) }
+    }
+
+    /// Handoff → saved in the chat's repo → new Cursor chat opened (and sent) by the autopilot.
+    private func startFreshNow(threadID: String) async {
+        let chat = snapshot.thread(threadID)
+        showToast("Writing a handoff for “\(chat?.title ?? "this chat")”…", seconds: 30)
+        let collector = self.collector
+        let queue = self.queue
+        let source: HandoffSource? = await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: collector.handoffSource(threadID: threadID)) }
+        }
+        guard let source else {
+            showToast("Couldn't read that chat.")
+            return
+        }
+        var text = Handoff.draft(source)
+        if let llm, llmHealthy, let refined = await llm.refineHandoff(text) { text = refined }
+
+        var prompt = text
+        if let saved = HandoffWriter.write(text, title: chat?.title ?? source.title, workspace: chat?.workspace, now: Date()) {
+            prompt = HandoffWriter.prompt(relativePath: saved.relativePath)
+        }
+        judge.recordFeedback(thread: threadID, feedback: "started fresh")
+        dismissedSuggestions.insert("fresh-\(threadID)")
+        speech = nil
+        expanded = false
+        let status = await CursorAutopilot.startNewChat(prompt: prompt, config: config.autopilot)
+        showToast(status, seconds: 7)
     }
 
     func snooze(threadID: String) {
         judge.snooze(thread: threadID, now: Date())
         if speech?.thread == threadID { speech = nil }
-        showToast("snoozed for \(Int(config.snoozeMinutes)) min")
+        showToast("Goldie won't nudge about this chat for \(Int(config.snoozeMinutes)) min")
         apply(rawSnapshot)
     }
 
@@ -296,20 +380,42 @@ final class GoldieEngine: ObservableObject {
         let key = verdict.targetThread ?? "_global"
         judge.notHelpful(thread: key, now: Date())
         speech = nil
-        showToast("noted. i'll back off")
+        showToast("Noted. I'll back off.")
         apply(rawSnapshot)
     }
 
-    func installHooks() {
+    /// Guards are enforced by Cursor's before-* hooks, so turning one on (re)installs hooks.
+    func setGuard(loop: Bool? = nil, read: Bool? = nil) {
+        if let loop { config.guards.loopGuard = loop }
+        if let read { config.guards.readGuard = read }
+        config.save()
+        let names = [config.guards.loopGuard ? "Loop guard" : nil, config.guards.readGuard ? "Big-read guard" : nil].compactMap { $0 }
+        if installHooks(quiet: true) {
+            showToast(names.isEmpty ? "Guards off." : "\(names.joined(separator: " + ")) on. If it doesn't kick in, restart Cursor.", seconds: 6)
+        }
+    }
+
+    func setAutoSend(_ on: Bool) {
+        config.autopilot.autoSend = on
+        config.save()
+        showToast(on ? "Start fresh will send the new chat for you." : "Start fresh will stop before sending, so you press Enter.")
+    }
+
+    @discardableResult
+    func installHooks(quiet: Bool = false) -> Bool {
         let cli = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("goldiectl")
         guard let cli, FileManager.default.isExecutableFile(atPath: cli.path) else {
-            showToast("build goldiectl first: swift build -c release")
-            return
+            showToast("Build goldiectl first: swift build -c release")
+            return false
         }
         do {
-            showToast(try CursorHooksInstaller.install(executable: cli.path), seconds: 6)
+            let message = try CursorHooksInstaller.install(executable: cli.path,
+                                                           guards: config.guards.loopGuard || config.guards.readGuard)
+            if !quiet { showToast(message, seconds: 6) }
+            return true
         } catch {
-            showToast("hook install failed: \(error)", seconds: 6)
+            showToast("Hook install failed: \(error)", seconds: 6)
+            return false
         }
     }
 
@@ -317,15 +423,17 @@ final class GoldieEngine: ObservableObject {
         NSWorkspace.shared.open(GoldieConfig.writeDefaultIfMissing())
     }
 
-    /// After "Start fresh", put Cursor in front so the paste is one keystroke away.
-    private static func bringCursorForward() {
-        // A background (accessory) app can't pull another app forward with activate() on macOS 14+;
-        // asking the system to open the app works.
-        let running = NSWorkspace.shared.runningApplications.first { $0.localizedName == "Cursor" }
-        guard let url = running?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.todesktop.230313mzl4w4u92") else { return }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: nil)
+    /// Opens the files that load into every chat (rules, AGENTS.md) so you can trim them.
+    private func openRules(in workspace: String) {
+        let root = URL(fileURLWithPath: workspace, isDirectory: true)
+        let candidates = [".cursor/rules", "AGENTS.md", ".cursorrules", "CLAUDE.md", ".cursor/mcp.json"]
+            .map { root.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        if candidates.isEmpty {
+            NSWorkspace.shared.open(root)
+        } else {
+            candidates.forEach { NSWorkspace.shared.open($0) }
+        }
     }
 
     func dismissSpeech() { speech = nil }
@@ -340,3 +448,26 @@ final class GoldieEngine: ObservableObject {
 }
 
 func clamp01(_ x: Double) -> Double { min(1, max(0, x)) }
+
+struct Suggestion: Identifiable, Equatable {
+    enum Action: Equatable {
+        case startFresh(String)
+        case enableLoopGuard
+        case enableReadGuard
+        case openRules(String)
+    }
+
+    let id: String
+    let icon: String
+    let title: String
+    let detail: String
+    let action: Action
+
+    var actionLabel: String {
+        switch action {
+        case .startFresh: return "Start fresh"
+        case .enableLoopGuard, .enableReadGuard: return "Turn on"
+        case .openRules: return "Open files"
+        }
+    }
+}

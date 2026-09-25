@@ -13,6 +13,8 @@ public struct HookThreadState: Equatable {
     public var runFiles: [String: Int] = [:]
     /// Timestamps of recent agent activity; used to match Cursor usage events (and their $) to this thread.
     public var recentEventTimes: [Date] = []
+    /// Times a Goldie guard blocked a step in this conversation.
+    public var guardBlocks: Int = 0
 
     public init(lastEventAt: Date) { self.lastEventAt = lastEventAt }
 }
@@ -81,7 +83,9 @@ public final class HookTracker {
         if let m = o["model"] as? String, !m.isEmpty { s.model = m }
         if let w = o["workspace"] as? String { s.workspace = w }
 
-        if event == "stop" {
+        if event.hasPrefix("guardDeny") {
+            s.guardBlocks += 1
+        } else if event == "stop" {
             s.running = false
             s.lastStatus = o["status"] as? String
         } else {
@@ -112,13 +116,36 @@ public final class HookTracker {
     }
 }
 
-/// Used by `goldiectl hook`: turn a Cursor hook payload (stdin JSON) into one small log line.
+/// Used by `goldiectl hook`: turn a Cursor hook payload (stdin JSON) into one small log line and,
+/// for the opt-in guard events, answer Cursor with allow/deny.
 /// Only metadata is kept: no prompts, agent text, file contents or command output.
 public enum HookRecorder {
+    /// Returns what to print to Cursor on stdout.
+    public static func handle(stdin: Data, eventArg: String?, file: URL = Paths.hookEventsFile,
+                              configURL: URL = Paths.configFile, now: Date = Date()) -> String {
+        let payload = J.obj(stdin) ?? [:]
+        let event = (payload["hook_event_name"] as? String) ?? eventArg ?? "unknown"
+        var output = "{}"
+        if event == Guards.shellEvent || event == Guards.readEvent {
+            output = #"{"permission":"allow"}"#  // fail open: a Goldie problem must never block your work
+            let guards = GoldieConfig.load(from: configURL).guards
+            if let decision = Guards.decide(event: event, payload: payload, config: guards, recent: tail(file), now: now) {
+                if let data = try? JSONSerialization.data(withJSONObject: decision.output),
+                   let text = String(data: data, encoding: .utf8) { output = text }
+                if let denied = decision.denied { append(denied, to: file) }
+            }
+        }
+        record(payload: payload, event: event, to: file, now: now)
+        return output
+    }
+
     public static func record(stdin: Data, eventArg: String?, to file: URL = Paths.hookEventsFile) {
         let payload = J.obj(stdin) ?? [:]
-        var rec: [String: Any] = ["ts": Date().timeIntervalSince1970]
-        rec["event"] = (payload["hook_event_name"] as? String) ?? eventArg ?? "unknown"
+        record(payload: payload, event: (payload["hook_event_name"] as? String) ?? eventArg ?? "unknown", to: file, now: Date())
+    }
+
+    static func record(payload: [String: Any], event: String, to file: URL, now: Date) {
+        var rec: [String: Any] = ["ts": now.timeIntervalSince1970, "event": event]
         for key in ["conversation_id", "generation_id", "model", "status", "file_path", "cursor_version"] {
             if let v = payload[key] as? String { rec[key] = String(v.prefix(300)) }
         }
@@ -126,8 +153,11 @@ public enum HookRecorder {
         if let roots = payload["workspace_roots"] as? [String], let first = roots.first { rec["workspace"] = first }
         if let n = J.number(payload["loop_count"]) { rec["loop_count"] = n }
         rec["keys"] = payload.keys.sorted()  // helps us learn the payload schema per Cursor version
+        append(rec, to: file)
+    }
 
-        guard var line = try? JSONSerialization.data(withJSONObject: rec) else { return }
+    static func append(_ rec: [String: Any], to file: URL) {
+        guard JSONSerialization.isValidJSONObject(rec), var line = try? JSONSerialization.data(withJSONObject: rec) else { return }
         line.append(0x0A)
         let fd = open(file.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         guard fd >= 0 else { return }
@@ -135,5 +165,18 @@ public enum HookRecorder {
             _ = write(fd, buf.baseAddress, buf.count)
         }
         close(fd)
+    }
+
+    /// The last ~128 KB of the log, parsed (enough to see the current task).
+    static func tail(_ file: URL, maxBytes: UInt64 = 128_000) -> [[String: Any]] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return [] }
+        let start = size > maxBytes ? size - maxBytes : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) else { return [] }
+        var lines = text.split(separator: "\n")
+        if start > 0, !lines.isEmpty { lines.removeFirst() }  // partial first line
+        return lines.compactMap { J.obj(String($0)) }
     }
 }

@@ -6,14 +6,17 @@ public enum CursorHooksInstaller {
     public static let events = ["afterAgentResponse", "afterShellExecution", "afterFileEdit", "afterMCPExecution", "stop"]
     static let marker = "goldiectl"
 
-    public static func install(executable: String, hooksFile: URL = Paths.cursorHooksFile) throws -> String {
+    /// `guards`: also register the before-shell/before-read hooks (only when a guard is turned on).
+    public static func install(executable: String, guards: Bool = false, hooksFile: URL = Paths.cursorHooksFile) throws -> String {
         var root = try load(hooksFile)
         backupOnce(hooksFile)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
-        for event in events {
+        for event in events + Guards.events {
             var list = (hooks[event] as? [[String: Any]] ?? []).filter { !isOurs($0) }
-            list.append(["command": "\"\(executable)\" hook \(event)"])
-            hooks[event] = list
+            if events.contains(event) || guards {
+                list.append(["command": "\"\(executable)\" hook \(event)"])
+            }
+            hooks[event] = list.isEmpty ? nil : list
         }
         root["hooks"] = hooks
         if root["version"] == nil { root["version"] = 1 }

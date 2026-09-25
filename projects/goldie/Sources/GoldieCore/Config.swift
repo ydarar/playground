@@ -25,6 +25,10 @@ public struct GoldieConfig: Codable, Equatable {
     public var judgeIntervalMinutes: Double = 5
 
     public var llm: LLMConfig = LLMConfig()
+    /// Opt-in prevention via Cursor's before-* hooks (Goldie offers these as suggestions).
+    public var guards: GuardConfig = GuardConfig()
+    /// How "Start fresh" opens the new Cursor chat.
+    public var autopilot: AutopilotConfig = AutopilotConfig()
 
     /// Read your Cursor usage (per-request $) with your existing Cursor login. Read-only; the
     /// login token is only ever sent to cursor.com, exactly like the Cursor app does.
@@ -75,6 +79,14 @@ public struct GoldieConfig: Codable, Equatable {
         return out
     }
 
+    /// Writes the full config (used when you flip a toggle in Goldie).
+    public func save(to url: URL = Paths.configFile) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? enc.encode(self) { try? data.write(to: url, options: .atomic) }
+    }
+
     @discardableResult
     public static func writeDefaultIfMissing(to url: URL = Paths.configFile) -> URL {
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -109,4 +121,27 @@ public enum ModelPolicy {
         guard let name = model?.lowercased(), !name.isEmpty else { return nil }
         return keywords.first { !$0.isEmpty && name.contains($0.lowercased()) }
     }
+}
+
+public struct GuardConfig: Codable, Equatable {
+    /// Block the Nth identical shell command in one task when no file was edited in between.
+    public var loopGuard: Bool = false
+    public var loopRepeatLimit: Int = 4
+    /// Block reading files bigger than this (the agent may ask again to override).
+    public var readGuard: Bool = false
+    public var readLimitKB: Int = 256
+    public init() {}
+}
+
+public struct AutopilotConfig: Codable, Equatable {
+    /// "keystrokes": open a new Cursor chat, paste, send (needs Accessibility permission).
+    /// "clipboard": only copy the prompt and bring Cursor forward.
+    public var mode: String = "keystrokes"
+    /// Press Enter after pasting.
+    public var autoSend: Bool = true
+    /// Shortcuts that focus Cursor's chat and open a new one.
+    public var newChatKeys: [String] = ["cmd+l", "cmd+n"]
+    /// Put back whatever was on your clipboard afterwards.
+    public var restoreClipboard: Bool = true
+    public init() {}
 }

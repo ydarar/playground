@@ -57,8 +57,20 @@ struct MenuContent: View {
             Text("Medium").tag(170.0)
             Text("Large").tag(210.0)
         }
-        Button("Install Cursor hooks") { engine.installHooks() }
-        Button("Open config") { engine.openConfig() }
+        Divider()
+        Group {
+            Toggle("Loop guard", isOn: Binding(get: { engine.config.guards.loopGuard },
+                                               set: { engine.setGuard(loop: $0) }))
+            Toggle("Big-read guard", isOn: Binding(get: { engine.config.guards.readGuard },
+                                                   set: { engine.setGuard(read: $0) }))
+            Toggle("Send new chats automatically", isOn: Binding(get: { engine.config.autopilot.autoSend },
+                                                                 set: { engine.setAutoSend($0) }))
+        }
+        Divider()
+        Group {
+            Button("Install Cursor hooks") { engine.installHooks() }
+            Button("Open config") { engine.openConfig() }
+        }
         Divider()
         Button("Quit Goldie") { NSApp.terminate(nil) }
     }

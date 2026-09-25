@@ -48,7 +48,7 @@ Cursor state.vscdb (read-only) ────────────────�
 | Goldie puffed up | The flagged thread costs a lot per turn |
 | Tight frantic circles | Runaway loop, or too many agents at once |
 | Small fry | Extra agents running in parallel |
-| A fresh bowl appears: *"fresh water?"* | Click it to copy a handoff prompt, then paste it into a new chat |
+| Orange number on the bowl | Goldie has suggestions. Click her → **Goldie's suggestions**: each has a button, or **Fix all** |
 | Goldie looks stressed but says nothing | No single chat is to blame, but the month is on pace to go over budget |
 | Hover Goldie | Quick peek: mood and today's $ |
 | Click Goldie (or her speech bubble) | Details: budget bar, Goldie's verdict with **Start fresh**, chats sorted by what needs you, setup checklist if something's missing |
@@ -82,6 +82,28 @@ Full install and integration test plan (written for a local agent): [docs/integr
 Debug what Goldie sees without the UI: `.build/release/goldiectl snapshot`.
 
 Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
+
+## Start fresh, suggestions and guards
+
+**Start fresh (autopilot).**
+1. Goldie writes a handoff doc to `.goldie/handoffs/<chat>-<time>.md` in that chat's repo. It's kept out of git via `.git/info/exclude`, so your `.gitignore` is untouched.
+2. She brings Cursor forward, opens a new chat (`autopilot.newChatKeys`, default ⌘L then ⌘N), pastes *"Continue the work described in @.goldie/handoffs/…"*, and sends it.
+3. Your clipboard is restored afterwards.
+4. Before every keystroke she checks that Cursor is still the frontmost app, and stops if it isn't.
+
+Autopilot needs macOS **Accessibility** permission. Grant it to Goldie, or to the Terminal you launch it from. Without it, Start fresh falls back to copying the prompt and bringing Cursor forward. Turn off "Send new chats automatically" in the menu bar if you'd rather press Enter yourself.
+
+**Suggestions.** The orange number on the bowl counts them:
+- start fresh for heavy chats;
+- turn on a guard when Goldie saw the problem happen;
+- trim the rules and tool setup every chat starts with.
+
+**Fix all** turns on the suggested guards, then starts fresh chats one at a time (up to 3).
+
+**Guards (opt-in, menu bar).** They use Cursor's before-shell and before-read hooks. Restart Cursor after turning one on.
+- **Loop guard:** blocks the Nth identical command in a task (default 4) when no file was edited in between, and tells the agent to change approach.
+- **Big-read guard:** refuses files over 256 KB once, telling the agent to search them. Asking again is allowed.
+- **Fail-open:** if Goldie has any problem, the hook answers "allow", so it never blocks your work by accident.
 
 ## Config
 

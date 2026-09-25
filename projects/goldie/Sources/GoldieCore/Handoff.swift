@@ -59,3 +59,69 @@ public enum Handoff {
         return out
     }
 }
+
+/// Saves handoff docs into the chat's repo (`.goldie/handoffs/`), kept out of git via `.git/info/exclude`
+/// so your tracked `.gitignore` is never touched.
+public enum HandoffWriter {
+    public static func write(_ text: String, title: String, workspace: String?, now: Date) -> (url: URL, relativePath: String)? {
+        guard let workspace, !workspace.isEmpty else { return nil }
+        let root = URL(fileURLWithPath: workspace, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        let dir = root.appendingPathComponent(".goldie/handoffs", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let name = slug(title) + "-" + stamp(now) + ".md"
+            let url = dir.appendingPathComponent(name)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            excludeFromGit(root)
+            return (url, ".goldie/handoffs/" + name)
+        } catch {
+            return nil
+        }
+    }
+
+    /// The short opening message for the new chat.
+    public static func prompt(relativePath: String) -> String {
+        "Continue the work described in @\(relativePath). Read that file first, then open only the files you actually need. Keep this chat focused."
+    }
+
+    static func slug(_ title: String) -> String {
+        let lowered = title.lowercased()
+        var out = ""
+        var lastDash = false
+        for ch in lowered {
+            if ch.isLetter || ch.isNumber, ch.isASCII {
+                out.append(ch)
+                lastDash = false
+            } else if !lastDash, !out.isEmpty {
+                out.append("-")
+                lastDash = true
+            }
+        }
+        while out.hasSuffix("-") { out.removeLast() }
+        let trimmed = String(out.prefix(40))
+        return trimmed.isEmpty ? "chat" : trimmed
+    }
+
+    static func stamp(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmm"
+        return f.string(from: date)
+    }
+
+    static func excludeFromGit(_ root: URL) {
+        let gitDir = root.appendingPathComponent(".git", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: gitDir.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let info = gitDir.appendingPathComponent("info", isDirectory: true)
+        try? FileManager.default.createDirectory(at: info, withIntermediateDirectories: true)
+        let exclude = info.appendingPathComponent("exclude")
+        let current = (try? String(contentsOf: exclude, encoding: .utf8)) ?? ""
+        let already = current.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == ".goldie/" }
+        guard !already else { return }
+        let separator = current.isEmpty || current.hasSuffix("\n") ? "" : "\n"
+        try? (current + separator + "# Goldie handoff docs\n.goldie/\n").write(to: exclude, atomically: true, encoding: .utf8)
+    }
+}

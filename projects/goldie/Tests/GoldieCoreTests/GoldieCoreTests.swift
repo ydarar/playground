@@ -314,7 +314,8 @@ final class GoldieCoreTests: XCTestCase {
         let bubbles = [
             bubble(user: true, text: "read the log", at: -100),
             CursorBubble(isUser: false, isTool: true, isEdit: false, text: "", toolName: "read_file", command: nil,
-                         filePath: "/tmp/server.log", inputTokens: nil, createdAt: now, textLength: 80_000),
+                         filePath: "/tmp/server.log", inputTokens: nil, createdAt: now, textLength: 90_000,
+                         resultLength: 80_000),
         ]
         let t = CursorThread(id: "a", title: "t", model: "grok-4.7", maxMode: false, createdAt: nil, lastUpdatedAt: now,
                              reportedContextTokens: nil, bubbles: bubbles)
@@ -344,5 +345,86 @@ final class GoldieCoreTests: XCTestCase {
         ancient.end = now.addingTimeInterval(-5 * 3600)  // Goldie didn't see this one happen
         store.record([ancient], now: now)
         XCTAssertNil(store.tasks[ancient.id])
+    }
+
+    // MARK: Guards, handoff files, installer
+
+    private func ev(_ event: String, _ extra: [String: Any] = [:]) -> [String: Any] {
+        var e: [String: Any] = ["event": event, "conversation_id": "c1", "ts": now.timeIntervalSince1970]
+        for (k, v) in extra { e[k] = v }
+        return e
+    }
+
+    func testLoopGuardBlocksRepeatsOnlyWithoutEdits() {
+        var config = GuardConfig()
+        config.loopGuard = true
+        config.loopRepeatLimit = 3
+        let payload: [String: Any] = ["conversation_id": "c1", "command": "npm  test"]
+        let runs = Array(repeating: ev("afterShellExecution", ["command": "npm test"]), count: 3)
+
+        let blocked = Guards.decide(event: Guards.shellEvent, payload: payload, config: config, recent: runs, now: now)
+        XCTAssertEqual(blocked?.output["permission"] as? String, "deny")
+        XCTAssertEqual(blocked?.denied?["event"] as? String, "guardDenyShell")
+
+        // An edit in between means the agent changed something: not a loop.
+        let withEdit = [runs[0], runs[1], ev("afterFileEdit", ["file_path": "a.ts"]), runs[2]]
+        XCTAssertEqual(Guards.decide(event: Guards.shellEvent, payload: payload, config: config, recent: withEdit, now: now)?
+            .output["permission"] as? String, "allow")
+
+        // Guard off: always allow.
+        XCTAssertEqual(Guards.decide(event: Guards.shellEvent, payload: payload, config: GuardConfig(), recent: runs, now: now)?
+            .output["permission"] as? String, "allow")
+    }
+
+    func testReadGuardDeniesOnceThenAllowsRetry() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-big-\(UUID()).log")
+        try Data(repeating: 65, count: 300 * 1024).write(to: url)
+        var config = GuardConfig()
+        config.readGuard = true
+        let payload: [String: Any] = ["conversation_id": "c1", "file_path": url.path]
+
+        let first = Guards.decide(event: Guards.readEvent, payload: payload, config: config, recent: [], now: now)
+        XCTAssertEqual(first?.output["permission"] as? String, "deny")
+        let denied = try XCTUnwrap(first?.denied)
+        let retry = Guards.decide(event: Guards.readEvent, payload: payload, config: config, recent: [denied], now: now)
+        XCTAssertEqual(retry?.output["permission"] as? String, "allow")
+    }
+
+    func testHandoffWriterSavesInRepoAndExcludesFromGit() throws {
+        let repo = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-repo-\(UUID())")
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let saved = try XCTUnwrap(HandoffWriter.write("## Goal\nx", title: "Browser notifications Spike!", workspace: repo.path, now: now))
+        XCTAssertTrue(saved.relativePath.hasPrefix(".goldie/handoffs/browser-notifications-spike-"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.url.path))
+        let exclude = try String(contentsOf: repo.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
+        XCTAssertTrue(exclude.contains(".goldie/"))
+        // Second write doesn't duplicate the exclude line.
+        _ = HandoffWriter.write("x", title: "t", workspace: repo.path, now: now)
+        let again = try String(contentsOf: repo.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
+        XCTAssertEqual(again.components(separatedBy: ".goldie/").count - 1, 1)
+        XCTAssertNil(HandoffWriter.write("x", title: "t", workspace: nil, now: now))
+    }
+
+    func testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-hooks-\(UUID()).json")
+        try Data(#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"./mine.sh"}]}}"#.utf8).write(to: file)
+        _ = try CursorHooksInstaller.install(executable: "/x/goldiectl", guards: false, hooksFile: file)
+        var hooks = try XCTUnwrap(J.obj(Data(contentsOf: file))?["hooks"] as? [String: Any])
+        XCTAssertEqual((hooks["beforeShellExecution"] as? [[String: Any]])?.count, 1)  // only the user's own
+        XCTAssertNil(hooks["beforeReadFile"])
+        XCTAssertNotNil(hooks["stop"])
+
+        _ = try CursorHooksInstaller.install(executable: "/x/goldiectl", guards: true, hooksFile: file)
+        hooks = try XCTUnwrap(J.obj(Data(contentsOf: file))?["hooks"] as? [String: Any])
+        XCTAssertEqual((hooks["beforeShellExecution"] as? [[String: Any]])?.count, 2)
+        XCTAssertEqual((hooks["beforeReadFile"] as? [[String: Any]])?.count, 1)
+    }
+
+    func testHookReplyFailsOpen() {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-events-\(UUID()).jsonl")
+        let config = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID()).json")
+        let reply = HookRecorder.handle(stdin: Data("not json".utf8), eventArg: Guards.shellEvent, file: file, configURL: config, now: now)
+        XCTAssertEqual(reply, #"{"permission":"allow"}"#)
+        XCTAssertEqual(HookRecorder.handle(stdin: Data(), eventArg: "stop", file: file, configURL: config, now: now), "{}")
     }
 }

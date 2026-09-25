@@ -14,6 +14,8 @@ public struct CursorBubble: Equatable {
     public var createdAt: Date?
     /// UTF-8 length of all text in the bubble (message, tool args, tool results).
     public var textLength: Int
+    /// UTF-8 length of the tool's result only (file contents, command output).
+    public var resultLength: Int = 0
 }
 
 public struct CursorThread: Equatable {
@@ -182,6 +184,13 @@ public final class CursorStore {
         }
 
         let isTool = toolName != nil || !args.isEmpty
+        var resultLength = 0
+        if let r = tool["result"] as? String {
+            resultLength = r.utf8.count
+        } else if let r = tool["result"], JSONSerialization.isValidJSONObject(r),
+                  let data = try? JSONSerialization.data(withJSONObject: r) {
+            resultLength = data.count
+        }
         let lowerName = (toolName ?? "").lowercased()
         let tokenCount = b["tokenCount"] as? [String: Any] ?? [:]
 
@@ -195,7 +204,8 @@ public final class CursorStore {
             filePath: fileArgKeys.lazy.compactMap { args[$0] as? String }.first,
             inputTokens: J.int(tokenCount["inputTokens"]),
             createdAt: J.date(b["createdAt"]),
-            textLength: J.textLength(b)
+            textLength: J.textLength(b),
+            resultLength: resultLength
         )
     }
 }
