@@ -59,6 +59,13 @@ public final class SnapshotCollector {
         return snapshot
     }
 
+    /// Names and sub-task chats for chats seen in usage (closed ones included); unknown ids are left out.
+    public func chatInfo(ids: [String]) -> [String: ChatInfo] {
+        var out: [String: ChatInfo] = [:]
+        for id in ids { out[id] = store.chatInfo(id: id) }
+        return out
+    }
+
     public func handoffSource(threadID: String) -> HandoffSource? {
         store.loadThread(id: threadID).map(HandoffSource.init(thread:))
     }

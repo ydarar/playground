@@ -48,6 +48,9 @@ struct MenuContent: View {
             Text("Goldie: \(engine.verdict.mood.label)")
             Text("AI budget: \(Fmt.usd(engine.snapshot.totalMonthUSD)) of \(Fmt.usd(engine.config.monthlyBudgetUSD)) · Cursor today \(Fmt.usd(engine.snapshot.todayUSD))")
             Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
+            if !engine.snapshot.overCapChats.isEmpty {
+                Text("\(engine.snapshot.overCapChats.count) chat(s) over the \(Fmt.usd(engine.config.chatCapUSD)) cap this month")
+            }
             Text("Cursor costs: \(engine.usageStatus)")
             if let hint = engine.hiddenHint { Text(hint) }
         }

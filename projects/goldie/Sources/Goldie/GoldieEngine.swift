@@ -82,6 +82,12 @@ final class GoldieEngine: ObservableObject {
     private var claudeInFlight = false
     private var lastClaudeAt = Date.distantPast
     private var lastUsageAt = Date.distantPast
+    /// Names and sub-task chats for every chat seen in usage (for the over-cap list); ids tried once.
+    private var chatInfo: [String: ChatInfo] = [:]
+    private var chatInfoTried: Set<String> = []
+    private var chatInfoInFlight = false
+    /// Each live chat's spend last time, so Goldie speaks once, when a chat crosses the cap.
+    private var lastSpent: [String: Double] = [:]
 
     init() {
         config = GoldieConfig.load()
@@ -225,6 +231,40 @@ final class GoldieEngine: ObservableObject {
         }
     }
 
+    /// Says so once when a live chat's spend crosses the per-chat cap (not for chats already over at launch).
+    private func announceCapCrossing(_ snap: Snapshot, now: Date) {
+        let cap = config.chatCapUSD
+        let crossed: ThreadSnapshot? = cap <= 0 ? nil : snap.threads.first(where: { t in
+            guard let spent = t.spentUSD, let before = lastSpent[t.id] else { return false }
+            return before < cap && spent >= cap
+        })
+        if crossed != nil && speech != nil { return }  // she's mid-sentence: say it on a later pass
+        lastSpent = Dictionary(snap.threads.compactMap { t in t.spentUSD.map { (t.id, $0) } }, uniquingKeysWith: { a, _ in a })
+        guard let crossed else { return }
+        let next = crossed.running ? "Let it finish this task, then start the next one fresh." : "Start your next task in a fresh chat."
+        speech = Speech(text: "This chat just passed your \(Fmt.usd(cap)) chat cap (\(Fmt.usd(crossed.spentUSD))). \(next)",
+                        thread: crossed.id, until: now.addingTimeInterval(90))
+    }
+
+    /// Looks up names (and sub-task chats) for chats seen in usage, once each, off the main thread.
+    private func refreshChatInfo() {
+        guard config.chatCapUSD > 0, !chatInfoInFlight else { return }
+        let ids = Array(Set(ledger.events.compactMap(\.conversationId)).subtracting(chatInfoTried).filter { !$0.isEmpty })
+        guard !ids.isEmpty else { return }
+        chatInfoInFlight = true
+        chatInfoTried.formUnion(ids)
+        let collector = self.collector
+        queue.async {
+            let found = collector.chatInfo(ids: ids)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.chatInfoInFlight = false
+                self.chatInfo.merge(found) { _, new in new }
+                if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
+            }
+        }
+    }
+
     /// Pulls new Cursor usage events (real $) every few minutes; incremental after the first fetch.
     private func refreshUsageIfDue() {
         let now = Date()
@@ -240,6 +280,7 @@ final class GoldieEngine: ObservableObject {
                 self.ledger.merge(events, now: Date())
                 self.usageStatus = complete ? "connected" : "connected (month total incomplete: too many events)"
                 if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
+                self.refreshChatInfo()
             } catch {
                 self?.usageStatus = "unavailable: \(error)"
             }
@@ -255,6 +296,7 @@ final class GoldieEngine: ObservableObject {
         snap.otherSourcesMonthUSD = (claudeMonthUSD ?? 0) + (config.sources.codexMonthUSD ?? 0) + (config.sources.opencodeMonthUSD ?? 0)
         snap.otherSourcesConnected = claudeMonthUSD != nil || config.sources.codexMonthUSD != nil || config.sources.opencodeMonthUSD != nil
         snap.projectTotal(now: now)
+        snap.overCapChats = ChatCap.overCap(events: ledger.events, cap: config.chatCapUSD, info: chatInfo, threads: snap.threads)
         snapshot = snap
         learn(from: snap, now: now)
         judge.observe(snap, now: now)
@@ -274,6 +316,7 @@ final class GoldieEngine: ObservableObject {
         } else if let s = speech, s.until < now || snap.threads.isEmpty {
             speech = nil
         }
+        announceCapCrossing(snap, now: now)
 
         let stale = now.timeIntervalSince(lastLLMAt) > config.judgeIntervalMinutes * 60
         if llm != nil, !llmInFlight, !snap.threads.isEmpty, fingerprint != lastFingerprint || stale {

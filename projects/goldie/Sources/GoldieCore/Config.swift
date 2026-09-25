@@ -35,6 +35,9 @@ public struct GoldieConfig: Codable, Equatable {
     public var cursorUsageAPI: Bool = true
     /// Monthly AI budget. Goldie's water level is the share of it that's left.
     public var monthlyBudgetUSD: Double = 800
+    /// Per-chat cap: any chat that costs more than this in a month is marked, open or closed.
+    /// $20 is 2.5% of an $800 month, about half a working day's share. 0 turns it off.
+    public var chatCapUSD: Double = 20
 
     /// Policy: no models from Chinese vendors. Matched case-insensitively against model names.
     /// Goldie's own brain refuses to run on a match; Cursor chats using one get flagged.

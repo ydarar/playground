@@ -92,6 +92,8 @@ public struct Snapshot: Codable, Equatable {
     public var otherSourcesConnected: Bool = false
     /// All tools' month-to-date spend extrapolated to the end of the month.
     public var projectedMonthUSD: Double? = nil
+    /// Every chat this month (open or closed) that has cost more than `chatCapUSD`, biggest first.
+    public var overCapChats: [CapChat] = []
 
     /// Everything that counts toward the AI token budget (Cursor + other tools).
     public var totalMonthUSD: Double? {

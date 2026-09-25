@@ -140,7 +140,7 @@ enum Severity {
     /// 0 fine, 1 getting heavy, 2 needs attention.
     static func of(_ t: ThreadSnapshot, config: GoldieConfig) -> Int {
         if t.loopScore >= 0.75 || t.contextRatio >= config.alarmedRatio { return 2 }
-        if t.loopScore >= 0.5 || t.contextRatio >= config.heavyRatio { return 1 }
+        if t.loopScore >= 0.5 || t.contextRatio >= config.heavyRatio || t.isOverCap(config) { return 1 }
         return 0
     }
 
@@ -184,6 +184,7 @@ struct DetailsCard: View {
             goldieSays
             if !engine.suggestions.isEmpty { SuggestionsSection(engine: engine) }
             threadList
+            if !engine.snapshot.overCapChats.isEmpty { OverCapSection(engine: engine) }
             TipsSection(engine: engine)
             footer
             if showLegend { Legend() }
@@ -478,6 +479,7 @@ struct ThreadRow: View {
     @ObservedObject var engine: GoldieEngine
 
     private var severity: Int { Severity.of(thread, config: engine.config) }
+    private var overCap: Bool { thread.isOverCap(engine.config) }
     private var color: Color { Severity.color(severity) }
 
     var body: some View {
@@ -491,6 +493,10 @@ struct ThreadRow: View {
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6).padding(.vertical, 1)
                             .background(Capsule().fill(Color.orange.opacity(0.25)))
+                    }
+                    if overCap {
+                        CapBadge(cap: engine.config.chatCapUSD)
+                            .help("Spent \(Fmt.usd(thread.spentUSD)) this month. Your per-chat cap is \(Fmt.usd(engine.config.chatCapUSD)) (chatCapUSD in config).")
                     }
                     Spacer()
                     Text(thread.running ? "running" : Fmt.idle(thread.lastActivity))
@@ -580,13 +586,17 @@ struct ThreadRow: View {
         case .freshNow: return "✨ Good moment: it's waiting for you. Start your next task in a fresh chat."
         case .finishThenFresh: return "⏳ Mid-task: let it finish here, then start the next task fresh."
         case .idleHeavy: return "💤 Idle, so it costs nothing now. If you come back to it, start fresh instead."
-        case .fine: return nil
+        case .fine:
+            guard overCap else { return nil }
+            return thread.running
+                ? "💸 Past your \(Fmt.usd(engine.config.chatCapUSD)) chat cap. Let this task finish, then start the next one fresh."
+                : "💸 Past your \(Fmt.usd(engine.config.chatCapUSD)) chat cap. Start your next task in a fresh chat."
         }
     }
 
     /// The main action matches the situation; Copy handoff is always there as a secondary option.
     @ViewBuilder private var actions: some View {
-        let emphasize = isSelected || advice == .freshNow
+        let emphasize = isSelected || advice == .freshNow || (overCap && !thread.running)
         HStack(spacing: 12) {
             if advice == .redirect {
                 Button("Copy redirect") { engine.copyRedirect(threadID: thread.id) }
@@ -661,6 +671,7 @@ struct Legend: View {
             item("When to start fresh", "At a task boundary: the chat is heavy and waiting for you (✨). Mid-task (⏳), let it finish, because a new chat would re-pay to rediscover everything. Idle chats (💤) cost nothing. Stuck chats (↩︎) usually need a redirect, not a new chat.")
             item("Copy redirect", "Copies a message telling the agent to stop, summarize what it learned, and propose a different approach before running anything. Paste it into that chat.")
             item("Copy handoff", "Copies a handoff (goal, where things stand, files that matter, what not to redo) to your clipboard. Paste it into a new chat.")
+            item("Over the chat cap", "A chat that has cost more than your per-chat cap this month (chatCapUSD, default $20: about half a working day of an $800 month). Marked in the chat list, and listed with closed chats under “Over the cap this month”. Goldie says so once when a chat crosses it.")
             item("Suggestions", "The number on Goldie's bowl: things worth doing now, each with its own button.")
             item("Guards", "Loop guard stops a command repeated with no code change in between. Big-read guard makes the agent search large files first; asking again is allowed. Both are opt-in (menu bar).")
         }
@@ -782,5 +793,72 @@ struct SuggestionsSection: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.10)))
+    }
+}
+
+/// Red "over $20" tag on a chat that passed the per-chat cap.
+struct CapBadge: View {
+    let cap: Double
+
+    var body: some View {
+        Text("over \(Fmt.usd(cap).replacingOccurrences(of: ".00", with: ""))")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.red)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Capsule().fill(Color.red.opacity(0.15)))
+    }
+}
+
+/// Every chat this month over the per-chat cap, open or closed: where the money went.
+struct OverCapSection: View {
+    @ObservedObject var engine: GoldieEngine
+    @State private var showAll = false
+
+    private var chats: [CapChat] { engine.snapshot.overCapChats }
+    private var shown: [CapChat] { showAll ? chats : Array(chats.prefix(5)) }
+
+    private var summary: String {
+        let total = chats.reduce(0) { $0 + $1.spentUSD }
+        var line = "\(chats.count) chat\(chats.count == 1 ? "" : "s") · \(Fmt.usd(total))"
+        if let month = engine.snapshot.monthUSD, month > 0 {
+            line += " · \(Int((min(total / month, 1) * 100).rounded()))% of Cursor this month"
+        }
+        return line
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Over the \(Fmt.usd(engine.config.chatCapUSD)) cap this month").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(shown) { chat in
+                HStack(spacing: 6) {
+                    Text(chat.title.isEmpty ? "Untitled chat" : chat.title)
+                        .font(.caption)
+                        .lineLimit(1)
+                    if chat.active {
+                        Text("open").font(.caption2).foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Text(chat.active ? "" : Fmt.ago(chat.lastAt))
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(Fmt.usd(chat.spentUSD))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(Color.red)
+                }
+            }
+            if chats.count > 5 {
+                Button(showAll ? "Show fewer" : "Show all \(chats.count)") {
+                    withAnimation(.easeInOut(duration: 0.15)) { showAll.toggle() }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.red.opacity(0.06)))
+        .help("Chats that cost more than chatCapUSD this month. Sub-task chats count toward their parent.")
     }
 }

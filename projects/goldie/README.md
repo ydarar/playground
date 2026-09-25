@@ -109,6 +109,13 @@ Hover a tool's icon for its status. The icons are stand-in symbols, not official
 
 "Heavy" is measured against what a fresh chat really costs you. Goldie learns that from your chats' first messages (`baseline.json`) instead of assuming 15k tokens.
 
+**Per-chat cap.** Any chat that costs more than `chatCapUSD` this month (default **$20**) is marked:
+- a red **over $20** tag on the chat, with advice to start the next task fresh;
+- an **Over the $20 cap this month** list in the card, including chats you've closed, with how much of the month they account for;
+- one speech bubble when a live chat crosses the cap (not for chats already over when Goldie starts).
+
+Sub-task chats count toward their parent. Why $20: it's 2.5% of an $800 month, about half a working day's share, so 40 such chats use the whole budget. `goldiectl usage` prints your chats' median and p90 spend to help pick your own number. Set it to 0 to turn the cap off.
+
 **Hiding.** The 👁 button in the card (or right-click the bowl) hides her. Show her again from the menu bar.
 
 **Suggestions.** The orange number on the bowl counts them:
@@ -133,6 +140,7 @@ Hover a tool's icon for its status. The icons are stand-in symbols, not official
   "alarmedRatio": 8,
   "parallelAlarm": 4,
   "speechCooldownMinutes": 15,
+  "chatCapUSD": 20,
   "llm": { "enabled": true, "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
            "model": "mlx-community/Llama-3.2-3B-Instruct-4bit" },
   "inputPricePerMTok": {}

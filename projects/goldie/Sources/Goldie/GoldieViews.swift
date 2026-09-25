@@ -18,6 +18,14 @@ enum Fmt {
         let m = Int(now.timeIntervalSince(since) / 60)
         return m < 1 ? "just now" : "idle \(m)m"
     }
+
+    /// "12m ago", "5h ago", "3d ago".
+    static func ago(_ since: Date, now: Date = Date()) -> String {
+        let m = max(0, Int(now.timeIntervalSince(since) / 60))
+        if m < 60 { return "\(m)m ago" }
+        if m < 48 * 60 { return "\(m / 60)h ago" }
+        return "\(m / (24 * 60))d ago"
+    }
 }
 
 extension Mood {

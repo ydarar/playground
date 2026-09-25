@@ -157,6 +157,15 @@ public final class CursorStore {
         return "\(row[0] ?? "-")/\(row[1] ?? "-")"
     }
 
+    /// Name and sub-task chats of any chat (open or closed), without loading its messages.
+    public func chatInfo(id: String) -> ChatInfo? {
+        guard let db = open(),
+              let row = db.strings("SELECT json_extract(CAST(value AS TEXT), '$.name'), json_extract(CAST(value AS TEXT), '$.subagentComposerIds') FROM cursorDiskKV WHERE key = ?", ["composerData:\(id)"]).first,
+              row.count == 2 else { return nil }
+        let subs = row[1].flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String] } ?? []
+        return ChatInfo(title: row[0] ?? "", subagentIds: subs)
+    }
+
     public func loadThread(id: String) -> CursorThread? {
         guard let db = open(),
               let data = db.firstValue("SELECT value FROM cursorDiskKV WHERE key = ?", ["composerData:\(id)"]),

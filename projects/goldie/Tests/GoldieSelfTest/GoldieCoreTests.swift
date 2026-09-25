@@ -571,5 +571,38 @@ final class GoldieCoreTests: XCTestCase {
         let later = ClaudeGateway.monthToDate(lifetime: 1_042.5, now: now.addingTimeInterval(3600), defaults: defaults)
         XCTAssertEqual(later.usd, 42.5, accuracy: 0.001)
     }
+    func testChatCapListsOpenAndClosedChatsWithSubagentsRolledUp() {
+        func tied(_ id: String, _ cents: Double, _ ago: Double) -> UsageEvent {
+            var e = event(now.addingTimeInterval(-ago), cents: cents)
+            e.conversationId = id
+            return e
+        }
+        let events = [tied("closed", 1500, 7200), tied("closed-sub", 600, 7000),  // $15 + $6 sub-task = $21
+                      tied("small", 900, 100), tied("live", 2500, 60)]
+        var live = thread("live", ratio: 2)
+        live.spentUSD = 25
+        let info = ["closed": ChatInfo(title: "Old refactor", subagentIds: ["closed-sub"])]
+        let over = ChatCap.overCap(events: events, cap: 20, info: info, threads: [live])
+        XCTAssertEqual(over.map(\.id), ["live", "closed"])
+        XCTAssertEqual(over[1].spentUSD, 21, accuracy: 0.001)
+        XCTAssertEqual(over[1].title, "Old refactor")
+        XCTAssertFalse(over[1].active)
+        XCTAssertTrue(over[0].active)
+        XCTAssertTrue(ChatCap.overCap(events: events, cap: 0, info: info, threads: [live]).isEmpty)  // 0 = off
+        XCTAssertTrue(live.isOverCap(GoldieConfig()))  // default cap is $20
+    }
+
+    func testSpentIncludesTheChatsOlderChargesNotJustRecentActivity() {
+        var a = thread("a", ratio: 2)
+        a.activityTimes = [now.addingTimeInterval(-60)]  // Goldie only saw the last minute of activity
+        var old = event(now.addingTimeInterval(-5 * 3600), cents: 700)
+        old.conversationId = "a"
+        var recent = event(now.addingTimeInterval(-30), cents: 300)
+        recent.conversationId = "a"
+        var ledger = UsageLedger()
+        ledger.merge([old, recent], now: now)
+        let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.spentUSD ?? 0, 10, accuracy: 0.001)
+    }
 }
 #endif

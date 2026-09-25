@@ -185,8 +185,12 @@ public enum CostModel {
             out.projectedMonthUSD = month * interval.duration / elapsed
         }
 
+        // Events Cursor tied to a chat always count, however old, so `spentUSD` is the chat's whole
+        // month. Untied events are matched by time, so only those near recent activity are candidates.
         let earliest = snap.threads.compactMap { $0.activityTimes.first }.min() ?? now
-        let candidates = ledger.events.filter { $0.at >= earliest.addingTimeInterval(-config.attributionToleranceSeconds) }
+        let candidates = ledger.events.filter {
+            !($0.conversationId ?? "").isEmpty || $0.at >= earliest.addingTimeInterval(-config.attributionToleranceSeconds)
+        }
         let assigned = attribute(candidates, to: snap.threads, tolerance: config.attributionToleranceSeconds)
         let rates = ledger.centsPerToken(now: now)
 
@@ -346,6 +350,7 @@ public enum UsageDiagnostics {
                 let today = all.filter { $0.at >= Calendar.current.startOfDay(for: now) }.reduce(0) { $0 + $1.cents } / 100
                 out.append("this month: \(all.count) events, $\(String(format: "%.2f", month)); today: $\(String(format: "%.2f", today))")
                 out.append(contentsOf: reconciliation(all, now: now))
+                out.append(contentsOf: ChatCap.distribution(all, cap: GoldieConfig.load().chatCapUSD))
             }
         } catch {
             out.append("!! request failed: \(error)")

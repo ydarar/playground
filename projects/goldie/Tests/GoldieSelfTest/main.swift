@@ -46,6 +46,8 @@ let tests: [(String, () throws -> Void)] = [
     ("testSubagentCostsRollUpToTheParentChat", suite.testSubagentCostsRollUpToTheParentChat),
     ("testShellOutputLabelSaysWhatItIs", suite.testShellOutputLabelSaysWhatItIs),
     ("testClaudeLifetimeSpendBecomesMonthToDate", suite.testClaudeLifetimeSpendBecomesMonthToDate),
+    ("testChatCapListsOpenAndClosedChatsWithSubagentsRolledUp", suite.testChatCapListsOpenAndClosedChatsWithSubagentsRolledUp),
+    ("testSpentIncludesTheChatsOlderChargesNotJustRecentActivity", suite.testSpentIncludesTheChatsOlderChargesNotJustRecentActivity),
 ]
 
 var failedTests = 0
