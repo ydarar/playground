@@ -110,16 +110,42 @@ Model prices live in `config.toml` (from our gateway/Bedrock pricing). They aren
 
 **Handoff generation** is the only time the model reads thread content. It reads locally, and nothing leaves the machine. Input: the first user message (the goal), files touched, the last few turns, and open errors. Output: a ≤300-word handoff prompt with goal, current state, files that matter, next step, and what *not* to redo. It's copied to the clipboard.
 
-## 7. Data sources (adapters)
+## 7. Data sources
 
-The app is harness-agnostic: each harness gets an adapter that emits normalized `TurnEvent`s:
+There are two layers, because no single source gives both *true money* and *per-thread detail*:
+
+- **Meters** answer "how much have I really spent?" They are billing truth, but only totals.
+- **Thread sensors** answer "what is *this* thread costing per turn?" They are local, real-time, and estimated.
+
+### 7a. Meters (money truth)
+
+There are **three separate meters, not one API**. Goldie adds them up.
+
+| Harness | Meter | Auth | Notes |
+|---|---|---|---|
+| **Claude** | LLM Gateway (LiteLLM): `GET /key/info` (key spend/budget) and `GET /v2/user/info` (user spend/budget) | LLMG virtual key, `Authorization: Bearer …` | Claude is the **only** harness on this key, since traffic is tagged `x-sf-ai-harness-client-id: claude`. So every $ on this key is Claude Code. `/user/daily/activity` returns **403** for virtual keys, so there's no server-side daily or tag breakdown. |
+| **Cursor** | Cursor `GET /api/usage-summary` (amounts in **cents**) | Signed-in Cursor session | Not on the gateway. Cursor's own billing. |
+| **Codex** | ChatGPT **credits** | ChatGPT login | No known usage URL. The known sources are DevBar's `Codex usage fetched … credits` log line, or Codex Settings → Usage. Needs a **credits → $ rate** in config. |
+
+**DevBar already reads all three.** v1 option: **tail DevBar's log** instead of re-implementing three auth flows. Goldie then only needs to parse the log. Direct providers stay as a fallback if DevBar isn't running.
+
+DevBar also exposes a company budget view (`/proxy/budget/api/v1/budget?periodType=month` via the DevBar proxy, personal-spend scope). It's a candidate for the "vs budget" denominator, though my own $800 target lives in config either way.
+
+**Totals → time series.** All the meters return running totals, so Goldie **polls and stores snapshots, then diffs them**. That diff is the only way to get per-day and per-hour spend (it gets around the 403 on daily activity).
+
+**Calibration trick (Claude).** The gateway key is Claude-only, so `gateway Δ$` over a window should equal the sum of Goldie's local per-turn estimates for Claude Code in that window. The ratio gives a **live correction factor** for the local cost model (pricing, caching and gateway markup). Same idea for Cursor: compare the summary's Δ with local estimates.
+
+**Secrets** (LLMG key, any session tokens) live in the **macOS Keychain**, never in `config.toml` or the repo. Internal hostnames go in local config only.
+
+### 7b. Thread sensors (per-thread, real-time)
+
+Each harness gets an adapter that emits normalized `TurnEvent`s:
 `{harness, thread_id, workspace, model, ts, input_tokens, cache_read, cache_write, output_tokens, tool_calls[], user_initiated}`.
 
-| Source | Mechanism | Phase |
+| Harness | Mechanism | Phase |
 |---|---|---|
-| **Bedrock gateway** | Your existing alias commands (**details pending from Yasin**). Ground truth for MTD spend. | v1 |
-| **Cursor** | (a) Cursor agent hooks (`~/.cursor/hooks.json`) call our tiny `goldie-hook` CLI for real-time turn/stop events. (b) Read Cursor's local state DB (`state.vscdb`, composer/bubble records) for token counts and model. **Needs a spike to confirm the fields.** | v1 |
-| **Claude Code** | Tail `~/.claude/projects/**/*.jsonl` (per-message `usage`) plus Claude Code hooks (`Stop`, `UserPromptSubmit`) | v2 |
+| **Cursor** | (a) Cursor agent hooks (`~/.cursor/hooks.json`) call our tiny `goldie-hook` CLI for real-time turn/stop events. (b) Read Cursor's local state DB (`state.vscdb`, composer/bubble records) for token counts and model. (c) If the dashboard's per-request usage events are reachable with the session, that gives **exact per-request cost**. **Spike all three.** | v1 |
+| **Claude Code** | Tail `~/.claude/projects/**/*.jsonl` (per-message `usage`, the same data `ccusage` reads) plus Claude Code hooks (`Stop`, `UserPromptSubmit`) | v2 |
 | **Codex** | Tail `~/.codex/sessions/**/rollout-*.jsonl` (`token_count` events) plus `notify` hook | v2 |
 | **Desktop chat apps** | No local usage data. At most "app is active" presence. | v3 / maybe never |
 
@@ -130,7 +156,7 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 ```
  Harness hooks ──► hook CLI ──┐
  Local logs/DBs ──► Adapters ─┼─► Event store (SQLite) ─► Signal engine ─► Brain (MLX) ─► Mascot UI
- Gateway alias ──► Poller ────┘                                    │                  (SwiftUI panel
+ Meters (3) ────► Poller ────┘                                    │                  (SwiftUI panel
                                                                    └──── fallback ────►  + menu bar)
 ```
 
@@ -138,21 +164,22 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 - Floating pet: borderless, transparent, non-activating `NSPanel` at floating level, on all Spaces.
 - Mascot rendering: **Rive** (its state machines map cleanly onto the moods) or SpriteKit. We'll decide once the character is chosen.
 - Storage: SQLite (GRDB). It keeps 90 days of turn events for trends.
-- Privacy: everything stays local. The only network calls are the gateway spend poll and a one-time model download.
+- Privacy: everything stays local. The only network calls are the meter polls (or none, if reading DevBar's log) and a one-time model download.
 
 ## 9. Milestones
 
 | # | Scope | Exit criteria |
 |---|---|---|
-| **M0 Spikes** | Get the gateway alias details. Verify Cursor hook payloads and `state.vscdb` token fields on my machine. Pick the MLX model. Commission/draw Goldie concept art. | Written findings in `docs/spikes.md` |
+| **M0 Spikes** | Locate DevBar's log and format. Get the Codex credits → $ rate. Verify Cursor hook payloads and `state.vscdb` token fields on my machine. Pick the MLX model. Commission/draw Goldie concept art. | Written findings in `docs/spikes.md` |
 | **M1 Skeleton** | Menu bar + floating panel with a placeholder mascot. Cursor adapter, event store, signal engine. Deterministic moods only. | Live per-thread `$ / next turn` for Cursor on screen |
 | **M2 Brain** | MLX brain, speech budget, feedback loop, handoff generation. | Nudges feel right for a week of real use |
-| **M3 Money** | Gateway MTD meter, projection, daily allowance, Stressed mood. | Pet numbers match the gateway within a few % |
+| **M3 Money** | Three meters (DevBar log first, direct fallback), snapshot diffing, calibration factor, projection, daily allowance, Stressed mood. | Pet totals match DevBar within a few % |
 | **M4 More harnesses** | Claude Code and Codex adapters. | All three harnesses in one view |
 | **M5 Goldie** | Final pop-funk Goldie + bowl art, a Rive state machine for every mood and the bowl encodings. | Looks good enough to leave on all day |
 
 ## 10. Open questions
-1. **Gateway aliases:** what do they call (CLI, HTTP, log) and what do they return? Can the gateway break spend down by client (Cursor vs Claude Code vs Codex) or by request?
-2. **Does Cursor route through the Bedrock gateway** (your own keys), or through Cursor's own billing? This changes which numbers are ground truth for Cursor.
-3. Is the budget per calendar month, or on a billing cycle date?
-4. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
+1. **Codex credits → $:** what's the conversion rate? Which of the three meters makes up most of the ~$20k? (Today's snapshot: Claude ≈ $79, Cursor ≈ $412, Codex ≈ 280k credits.)
+2. Are those meter values **month-to-date or lifetime**? LiteLLM key spend is lifetime unless the key has a budget reset period.
+3. **DevBar log:** path, format, how often it refreshes, and is DevBar always running?
+4. Is the $800 per calendar month, or on a billing-cycle date?
+5. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
