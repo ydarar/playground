@@ -43,12 +43,14 @@ If Goldie is running, quit it first: `pkill -x Goldie`.
 ```bash
 cd ~/playground/projects/goldie
 swift build -c release 2>&1 | tail -30
-swift test 2>&1 | tail -30
+swift run goldie-selftest 2>&1 | tail -45   # XCTest-free test runner (works without Xcode)
 ```
 
 Pass when:
 - the build prints `Build complete!`;
-- the tests report 0 failures.
+- the self-test ends with `N/N tests passed`.
+
+If `swift build` crashes with a `BuildServerProtocol` symbol mismatch (Command Line Tools only), build with Homebrew Swift and the CLT SDK, e.g. `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk $(brew --prefix swift)/bin/swift build -c release`, and use the same for `swift run goldie-selftest`.
 
 Warnings are fine. On errors, copy the first 40 lines starting at the first `error:` into the report.
 
@@ -130,7 +132,7 @@ For the tests marked **(user)**, ask the user to run the Cursor chat described, 
 | IT-1 | Hooks fire **(user)** | User runs any Cursor **agent** chat that runs one terminal command and edits one file. Then `tail -5 ~/"Library/Application Support/Goldie/cursor-hook-events.jsonl"`, reporting event names and `keys` only. | Events arrive with a `conversation_id`. Report which payload keys Cursor sends. |
 | IT-2 | Chat detection | `.build/release/goldiectl snapshot` | The chat from IT-1 appears with the right title and model, `contextSource` ≠ `unknown`, and plausible `contextTokens`. |
 | IT-3 | Task tracking | Same snapshot: `threads[].tasks` | At least one task, with a `start` time, a sensible `kind`, and `steps` > 0. If `tasks` is empty, say so (likely no `createdAt`; see D1). |
-| IT-4 | Real costs **(user)** | Menu bar 🐠 shows today's $. Click Goldie: the budget bar shows the month total. User reads the month total at cursor.com/settings (usage). | Goldie's month total is within ~5% of Cursor's. Report both numbers. |
+| IT-4 | Real costs **(user)** | Run `goldiectl usage`. At the same moment, the user **refreshes** cursor.com → Usage (month-to-date) and reads Total usage. Repeat both about 1 hour later. | Report the dashboard total and all four "Month total candidates" lines (A–D), plus the discount values seen, for both runs. Pass when one candidate is within ~2% of the dashboard in both runs. If none matches but the gap shrinks between runs, that suggests dashboard lag; say so. |
 | IT-5 | Loop detection **(user)** | User asks a Cursor agent: "Run `echo goldie-loop-test` five times, as five separate terminal commands." Then take a snapshot. | That chat shows `maxRepeatCommand` ≥ 3, and the card shows "Ran `echo goldie-loop-test` N× in a row." |
 | IT-6 | Big-read detection **(user)** | `python3 -c "print('x'*200000)" > /tmp/goldie-big.txt`. User asks a Cursor agent: "Read /tmp/goldie-big.txt and tell me its length." Then take a snapshot. | That chat has `bloatTokens` ≥ 10000 and `bloatLabel` `goldie-big.txt`. |
 | IT-7 | Suggestions → Start fresh on autopilot **(user)** | Temporarily set `{"heavyRatio": 1.2, "alarmedRatio": 2, "speechCooldownMinutes": 1}` in the config, then restart Goldie. Wait for the orange number badge on the bowl. Click Goldie → **Goldie's suggestions** → **Start fresh** on one chat. The first time, macOS asks for Accessibility: grant it to the app running Goldie (Terminal if launched from Terminal), then click Start fresh again. | A handoff file appears in that repo at `.goldie/handoffs/*.md` (report the headers only). `.goldie/` is added to `.git/info/exclude`. A new Cursor chat opens with "Continue the work described in @.goldie/handoffs/…" and is sent. The user's clipboard is restored afterwards. Run it twice: once with Cursor's chat pane **open** and once **closed**. ⌘L may toggle the pane. If a new *file* opens instead of a new chat, report it and what `autopilot.newChatKeys` should be. Also try `"autopilot": {"mode": "deeplink"}`, which prefills a new chat via Cursor's deeplink, and report which mode works. |

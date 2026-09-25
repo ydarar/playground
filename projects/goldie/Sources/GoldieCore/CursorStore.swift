@@ -16,6 +16,7 @@ public struct CursorBubble: Equatable {
     public var textLength: Int
     /// UTF-8 length of the tool's result only (file contents, command output).
     public var resultLength: Int = 0
+    public var resultIsImage: Bool = false
 }
 
 public struct CursorThread: Equatable {
@@ -97,21 +98,22 @@ public final class CursorStore {
         public var signature: String
     }
 
-    /// Most recently written composers. Rows are upserted with REPLACE, so the highest rowids are
-    /// the most recently touched; that avoids JSON-parsing every thread on every poll.
-    public func recentComposers(limit: Int) -> [ComposerRef] {
+    private var recentCache: (at: Date, refs: [ComposerRef])?
+
+    /// Most recently updated composers, by `lastUpdatedAt`. This JSON-parses every composer row,
+    /// so the list is cached for a minute; hooks cover real-time activity in between.
+    /// (Rowid order looked like a cheap shortcut, but on Cursor 3.x it doesn't track recency.)
+    public func recentComposers(limit: Int, now: Date = Date(), maxAge: TimeInterval = 60) -> [ComposerRef] {
+        if let cached = recentCache, now.timeIntervalSince(cached.at) < maxAge { return cached.refs }
         guard let db = open() else { return [] }
-        let select = "SELECT key, json_extract(CAST(value AS TEXT), '$.lastUpdatedAt'), length(value) FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;'"
-        var rows = db.strings(select + " ORDER BY rowid DESC LIMIT \(limit)")
-        if rows.isEmpty {
-            rows = db.strings(select + " ORDER BY 2 DESC LIMIT \(limit)")
+        let rows = db.strings("SELECT key, json_extract(CAST(value AS TEXT), '$.lastUpdatedAt') FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;' ORDER BY 2 DESC LIMIT \(limit)")
+        let refs = rows.compactMap { row -> ComposerRef? in
+            guard row.count == 2, let key = row[0], let raw = row[1], let updated = J.date(Double(raw)) else { return nil }
+            // Signature left empty: the collector fetches a fresh one per poll for active candidates.
+            return ComposerRef(id: String(key.dropFirst("composerData:".count)), updated: updated, signature: "")
         }
-        return rows.compactMap { row in
-            guard row.count == 3, let key = row[0] else { return nil }
-            let id = String(key.dropFirst("composerData:".count))
-            let updated = J.date(row[1].flatMap { Double($0) })
-            return ComposerRef(id: id, updated: updated, signature: "\(row[1] ?? "-")/\(row[2] ?? "-")")
-        }
+        recentCache = (at: now, refs: refs)
+        return refs
     }
 
     public func signature(id: String) -> String? {
@@ -185,12 +187,19 @@ public final class CursorStore {
 
         let isTool = toolName != nil || !args.isEmpty
         var resultLength = 0
+        var resultHead = ""
         if let r = tool["result"] as? String {
             resultLength = r.utf8.count
+            resultHead = String(r.prefix(400)).lowercased()
         } else if let r = tool["result"], JSONSerialization.isValidJSONObject(r),
                   let data = try? JSONSerialization.data(withJSONObject: r) {
             resultLength = data.count
+            resultHead = String(decoding: data.prefix(400), as: UTF8.self).lowercased()
         }
+        let lowerTool = (toolName ?? "").lowercased()
+        // Screenshots/images aren't the "huge file or log" problem the big-read signal is about.
+        let resultIsImage = lowerTool.contains("screenshot") || lowerTool.contains("image")
+            || resultHead.contains("data:image") || resultHead.contains("base64") || resultHead.contains("\"image\"")
         let lowerName = (toolName ?? "").lowercased()
         let tokenCount = b["tokenCount"] as? [String: Any] ?? [:]
 
@@ -205,7 +214,8 @@ public final class CursorStore {
             inputTokens: J.int(tokenCount["inputTokens"]),
             createdAt: J.date(b["createdAt"]),
             textLength: J.textLength(b),
-            resultLength: resultLength
+            resultLength: resultLength,
+            resultIsImage: resultIsImage
         )
     }
 }

@@ -76,7 +76,7 @@ public final class LLMBrain {
             var d: [String: Any] = [
                 "id": short,
                 "title": t.title.clipped(60),
-                "model": t.model ?? "unknown",
+                "model": t.effectiveModel ?? "unknown",
                 "max_mode": t.maxMode,
                 "context_tokens": t.contextTokens,
                 "context_source": t.contextSource,
@@ -95,7 +95,7 @@ public final class LLMBrain {
             if let last = t.lastMessageUSD { d["last_message_usd"] = (last * 100).rounded() / 100 }
             if let kind = t.currentKind {
                 d["current_task_kind"] = kind.rawValue
-                if let tip = ModelFit.advice(kind: kind, model: t.model, stats: ctx.modelStats) { d["model_fit_tip"] = tip }
+                if let tip = ModelFit.advice(kind: kind, model: t.effectiveModel, stats: ctx.modelStats) { d["model_fit_tip"] = tip }
             }
             if t.bloatTokens > 0 { d["biggest_single_read_tokens"] = t.bloatTokens }
             threads.append(d)

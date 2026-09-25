@@ -20,7 +20,7 @@ public final class SnapshotCollector {
 
         // Candidates: recently written composers, plus anything hooks saw recently.
         var candidates: [String: String] = [:]  // id → DB signature ("" = look it up)
-        for ref in store.recentComposers(limit: 40) {
+        for ref in store.recentComposers(limit: 40, now: now) {
             if let updated = ref.updated, now.timeIntervalSince(updated) > window { continue }
             candidates[ref.id] = ref.signature
         }

@@ -35,6 +35,11 @@ let tests: [(String, () throws -> Void)] = [
     ("testHandoffWriterSavesInRepoAndExcludesFromGit", suite.testHandoffWriterSavesInRepoAndExcludesFromGit),
     ("testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks", suite.testInstallerAddsGuardHooksOnlyWhenAskedAndKeepsUserHooks),
     ("testHookReplyFailsOpen", suite.testHookReplyFailsOpen),
+    ("testConversationIdAttributionIsExactAndNeverGuessed", suite.testConversationIdAttributionIsExactAndNeverGuessed),
+    ("testTaskModelComesFromBilledEvents", suite.testTaskModelComesFromBilledEvents),
+    ("testUsageEventReconciliationFields", suite.testUsageEventReconciliationFields),
+    ("testBigReadIgnoresScreenshots", suite.testBigReadIgnoresScreenshots),
+    ("testProbeHidesPathLikeKeys", suite.testProbeHidesPathLikeKeys),
 ]
 
 var failedTests = 0

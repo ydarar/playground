@@ -139,7 +139,7 @@ final class GoldieCoreTests: XCTestCase {
     func testParseUsageEvents() {
         let body: [String: Any] = ["usageEventsDisplay": [
             ["timestamp": "1800000000000", "model": "grok-4.7",
-             "tokenUsage": ["inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 1000, "totalCents": 12.5]],
+             "tokenUsage": ["inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 1000, "totalCents": 12.5]] as [String: Any],
             ["timestamp": "1800000060000", "model": "auto", "usageBasedCosts": "$0.30"],
         ]]
         let events = CursorUsageClient.parseEvents(body)
@@ -429,5 +429,80 @@ final class GoldieCoreTests: XCTestCase {
         let reply = HookRecorder.handle(stdin: Data("not json".utf8), eventArg: Guards.shellEvent, file: file, configURL: config, now: now)
         XCTAssertEqual(reply, "{}")  // never auto-approves
         XCTAssertEqual(HookRecorder.handle(stdin: Data(), eventArg: "stop", file: file, configURL: config, now: now), "{}")
+    }
+
+    // MARK: Integration-report fixes
+
+    func testConversationIdAttributionIsExactAndNeverGuessed() {
+        var a = thread("a", ratio: 5)
+        a.activityTimes = [now.addingTimeInterval(-60)]
+        var b = thread("b", ratio: 1)
+        b.activityTimes = [now.addingTimeInterval(-60)]  // same moment: time matching couldn't tell them apart
+
+        var forB = event(now.addingTimeInterval(-55), cents: 40, model: "grok-4.7-high-fast")
+        forB.conversationId = "b"
+        var otherChat = event(now.addingTimeInterval(-58), cents: 99)
+        otherChat.conversationId = "someone-else"  // a chat Goldie isn't watching
+        var ledger = UsageLedger()
+        ledger.merge([forB, otherChat], now: now)
+
+        let s = CostModel.enrich(snapshot([a, b]), ledger: ledger, config: GoldieConfig(), now: now)
+        XCTAssertNil(s.threads[0].spentUSD)
+        XCTAssertEqual(s.threads[1].spentUSD ?? 0, 0.40, accuracy: 0.0001)
+        XCTAssertEqual(s.threads[1].billedModel, "grok-4.7-high-fast")
+        XCTAssertEqual(s.threads[1].effectiveModel, "grok-4.7-high-fast")
+    }
+
+    func testTaskModelComesFromBilledEvents() {
+        var a = thread("a", ratio: 3)
+        a.activityTimes = [now.addingTimeInterval(-100)]
+        a.tasks = [TaskSegment(threadID: "a", model: "grok-4.7", kind: .debugging, start: now.addingTimeInterval(-120),
+                               end: now.addingTimeInterval(-60), steps: 2, maxRepeat: 0, complete: true, reasked: false, costUSD: nil)]
+        var e1 = event(now.addingTimeInterval(-100), cents: 10, model: "grok-4.7-high")
+        e1.conversationId = "a"
+        var e2 = event(now.addingTimeInterval(-90), cents: 10, model: "grok-4.7-high")
+        e2.conversationId = "a"
+        var ledger = UsageLedger()
+        ledger.merge([e1, e2], now: now)
+        let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.tasks[0].model, "grok-4.7-high")
+        XCTAssertEqual(t.tasks[0].costUSD ?? 0, 0.20, accuracy: 0.0001)
+    }
+
+    func testUsageEventReconciliationFields() {
+        let body: [String: Any] = ["usageEventsDisplay": [
+            ["timestamp": "1800000000000", "model": "grok-4.7-high", "conversationId": "c9", "isChargeable": false,
+             "chargedCents": 5, "tokenUsage": ["totalCents": 10, "enterpriseUsageDiscountPercent": 7]] as [String: Any],
+        ]]
+        let e = CursorUsageClient.parseEvents(body)[0]
+        XCTAssertEqual(e.conversationId, "c9")
+        XCTAssertFalse(e.chargeable)
+        XCTAssertEqual(e.chargedCents, 5)
+        XCTAssertEqual(e.discountPercent, 7)
+        XCTAssertEqual(e.cents, 10)  // Goldie's total stays raw until the dashboard comparison picks a formula
+        let lines = UsageDiagnostics.reconciliation([e], now: now).joined(separator: "\n")
+        XCTAssertTrue(lines.contains("$0.10"))   // A raw
+        XCTAssertTrue(lines.contains("$0.09"))   // B after 7% discount (9.3¢)
+        XCTAssertTrue(lines.contains("7.00%"))
+    }
+
+    func testBigReadIgnoresScreenshots() {
+        let shot = CursorStore.parseBubble(["type": 2, "toolFormerData": [
+            "name": "mcp-cursor-ide-browser-browser_take_screenshot",
+            "result": "data:image/png;base64," + String(repeating: "A", count: 200_000)]])
+        let file = CursorStore.parseBubble(["type": 2, "toolFormerData": [
+            "name": "read_file_v2", "rawArgs": #"{"path":"/tmp/goldie-big.txt"}"#,
+            "result": String(repeating: "x", count: 60_000)]])
+        XCTAssertTrue(shot.resultIsImage)
+        XCTAssertFalse(file.resultIsImage)
+        let t = CursorThread(id: "a", title: "t", model: nil, maxMode: false, createdAt: nil, lastUpdatedAt: now,
+                             reportedContextTokens: nil, bubbles: [shot, file])
+        let snap = Signals.build(id: "a", thread: t, hook: nil, config: GoldieConfig(), now: now)
+        XCTAssertEqual(snap.bloatLabel, "goldie-big.txt")
+    }
+
+    func testProbeHidesPathLikeKeys() {
+        XCTAssertEqual(CursorProbe.describe(["file:///Users/me/secret.swift": 1]), "object(1 keys, names hidden)")
+        XCTAssertEqual(CursorProbe.describe(["modelName": "x", "maxMode": 0] as [String: Any]), "object{maxMode,modelName}")
     }
 }

@@ -458,7 +458,7 @@ struct ThreadRow: View {
     private var metaLine: String {
         var parts: [String] = []
         if let kind = thread.dominantKind { parts.append(kind.rawValue) }
-        parts.append(thread.model ?? "unknown model")
+        parts.append(thread.effectiveModel ?? "unknown model")
         if thread.maxMode { parts.append("Max Mode") }
         if let spent = thread.spentUSD { parts.append("spent \(Fmt.usd(spent))") }
         if let last = thread.lastMessageUSD, last > 0 { parts.append("last task \(Fmt.usd(last))") }
@@ -475,8 +475,9 @@ struct ThreadRow: View {
 
     /// Something is wrong right now.
     private var warningLine: String? {
-        if ModelPolicy.blockedKeyword(for: thread.model, keywords: engine.config.blockedModelKeywords) != nil {
-            return "⛔︎ Uses \(thread.model ?? "a blocked model"), a Chinese-vendor model. Switch to an approved model."
+        let keywords = engine.config.blockedModelKeywords
+        if let blocked = [thread.billedModel, thread.model].compactMap({ $0 }).first(where: { ModelPolicy.blockedKeyword(for: $0, keywords: keywords) != nil }) {
+            return "⛔︎ Uses \(blocked), a Chinese-vendor model. Switch to an approved model."
         }
         if thread.maxRepeatCommand >= 3, let cmd = thread.topRepeatedCommand {
             return "⚠︎ Ran `\(cmd.prefix(40))` \(thread.maxRepeatCommand)× in a row. Probably stuck."
@@ -493,7 +494,7 @@ struct ThreadRow: View {
     /// The single most useful way to make this chat cheaper, strongest evidence first.
     private var tipLine: String? {
         if let kind = thread.currentKind,
-           let fit = ModelFit.advice(kind: kind, model: thread.model, stats: engine.modelStats) {
+           let fit = ModelFit.advice(kind: kind, model: thread.effectiveModel, stats: engine.modelStats) {
             return "💡 " + fit
         }
         if thread.bloatTokens >= 10_000, let label = thread.bloatLabel {

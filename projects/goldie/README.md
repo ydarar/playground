@@ -60,7 +60,7 @@ Cursor state.vscdb (read-only) ────────────────�
 ```bash
 cd projects/goldie
 swift build -c release
-swift test                                    # core logic tests
+swift run goldie-selftest                     # core logic tests (no Xcode needed)
 
 # 1. Check that Goldie can read your Cursor data (structure only, no message text):
 .build/release/goldiectl probe                # ← paste this output back to Claude
@@ -76,6 +76,10 @@ mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 # 4. Launch Goldie
 .build/release/Goldie
 ```
+
+**Build trouble with only the Command Line Tools?** If `swift build` crashes with a `BuildServerProtocol` symbol error, use Homebrew's Swift with the CLT SDK:
+`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk $(brew --prefix swift)/bin/swift build -c release`
+(adjust the SDK version to what's in that folder). Installing Xcode also fixes it.
 
 Full install and integration test plan (written for a local agent): [docs/integration-test-plan.md](docs/integration-test-plan.md).
 

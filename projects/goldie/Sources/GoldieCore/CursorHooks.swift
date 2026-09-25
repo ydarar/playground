@@ -103,11 +103,12 @@ public enum CursorProbe {
         say("composer threads: \(count ?? "?")")
 
         let cols = "substr(key, 14), rowid, json_extract(CAST(value AS TEXT), '$.lastUpdatedAt'), length(value)"
-        say("\nnewest by rowid (Goldie's fast path; should roughly match the next list):")
-        for r in db.strings("SELECT \(cols) FROM cursorDiskKV WHERE \(range) ORDER BY rowid DESC LIMIT 6") {
-            say("  \((r[0] ?? "?").prefix(8))  rowid=\(r[1] ?? "-")  lastUpdatedAt=\(r[2] ?? "-")  bytes=\(r[3] ?? "-")")
+        if tables.contains("composerHeaders") {
+            let columns = db.strings("PRAGMA table_info(composerHeaders)").compactMap { $0.count > 2 ? "\($0[1] ?? "?"):\($0[2] ?? "?")" : nil }
+            let headerCount = db.strings("SELECT count(*) FROM composerHeaders").first?.first ?? nil
+            say("composerHeaders columns: \(columns.joined(separator: ", "))  rows: \(headerCount ?? "?")")
         }
-        say("newest by lastUpdatedAt:")
+        say("\nnewest by lastUpdatedAt (what Goldie watches):")
         let newest = db.strings("SELECT \(cols) FROM cursorDiskKV WHERE \(range) ORDER BY 3 DESC LIMIT 6")
         for r in newest {
             say("  \((r[0] ?? "?").prefix(8))  rowid=\(r[1] ?? "-")  lastUpdatedAt=\(r[2] ?? "-")  bytes=\(r[3] ?? "-")")
@@ -169,7 +170,12 @@ public enum CursorProbe {
         if let n = v as? NSNumber { return "number(\(n))" }
         if let s = v as? String { return "string(len \(s.count))" }
         if let a = v as? [Any] { return "array(\(a.count))" }
-        if let d = v as? [String: Any] { return "object{\(d.keys.sorted().prefix(15).joined(separator: ","))}" }
+        if let d = v as? [String: Any] {
+            // Key names only when they look like field names; keys can be file paths or URLs.
+            let keys = d.keys.sorted()
+            let safe = keys.allSatisfy { $0.range(of: "^[A-Za-z_][A-Za-z0-9_]{0,40}$", options: .regularExpression) != nil }
+            return safe ? "object{\(keys.prefix(15).joined(separator: ","))}" : "object(\(d.count) keys, names hidden)"
+        }
         return "\(type(of: v))"
     }
 }

@@ -9,6 +9,12 @@ public struct UsageEvent: Codable, Hashable {
     public var outputTokens: Int
     public var cacheReadTokens: Int
     public var cacheWriteTokens: Int
+    /// The Cursor chat this request belonged to (exact per-chat attribution).
+    public var conversationId: String? = nil
+    // Kept for reconciling with the cursor.com dashboard (`goldiectl usage` prints the candidates).
+    public var chargeable: Bool = true
+    public var chargedCents: Double? = nil
+    public var discountPercent: Double? = nil
 
     public var totalTokens: Int { inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens }
 }
@@ -129,7 +135,7 @@ public final class CursorUsageClient {
             guard let at = J.date(e["timestamp"]) else { return nil }
             let usage = e["tokenUsage"] as? [String: Any] ?? [:]
             let cents = J.number(usage["totalCents"]) ?? J.number(e["totalCents"]) ?? dollars(e["usageBasedCosts"]).map { $0 * 100 } ?? 0
-            return UsageEvent(
+            var event = UsageEvent(
                 at: at,
                 model: (e["model"] as? String) ?? "unknown",
                 cents: cents,
@@ -138,6 +144,11 @@ public final class CursorUsageClient {
                 cacheReadTokens: J.int(usage["cacheReadTokens"]) ?? 0,
                 cacheWriteTokens: J.int(usage["cacheWriteTokens"]) ?? 0
             )
+            event.conversationId = e["conversationId"] as? String
+            event.chargeable = (e["isChargeable"] as? Bool) ?? true
+            event.chargedCents = J.number(e["chargedCents"])
+            event.discountPercent = J.number(usage["enterpriseUsageDiscountPercent"])
+            return event
         }
     }
 
@@ -182,9 +193,12 @@ public enum CostModel {
                     if !inTask.isEmpty {
                         t.tasks[j].costUSD = inTask.reduce(0) { $0 + $1.cents } / 100
                         t.tasks[j].steps = max(t.tasks[j].steps, inTask.count)
+                        // The billed model is more precise than the chat's setting (e.g. reasoning effort).
+                        if let billed = dominantModel(inTask) { t.tasks[j].model = billed }
                     }
                 }
                 if let lastTask = t.tasks.last?.costUSD { t.lastMessageUSD = lastTask }
+                t.billedModel = events.last?.model
                 let recent = events.suffix(3)
                 t.nextTurnCostUSD = recent.reduce(0) { $0 + $1.cents } / Double(recent.count) / 100
                 t.costSource = "cursor"
@@ -197,10 +211,16 @@ public enum CostModel {
         return out
     }
 
-    /// Each event goes to the thread with the nearest activity timestamp (within tolerance).
+    /// Exact when Cursor says which chat a request belonged to (`conversationId`); otherwise the
+    /// thread with the nearest activity timestamp (within tolerance).
     static func attribute(_ events: [UsageEvent], to threads: [ThreadSnapshot], tolerance: Double) -> [String: [UsageEvent]] {
         var out: [String: [UsageEvent]] = [:]
+        let ids = Set(threads.map(\.id))
         for e in events {
+            if let conversation = e.conversationId, !conversation.isEmpty {
+                if ids.contains(conversation) { out[conversation, default: []].append(e) }
+                continue  // belongs to a chat Goldie isn't watching: never guess by time
+            }
             var best: (id: String, distance: Double)?
             for t in threads {
                 guard let d = nearestDistance(e.at, in: t.activityTimes), d <= tolerance else { continue }
@@ -209,6 +229,12 @@ public enum CostModel {
             if let best { out[best.id, default: []].append(e) }
         }
         return out
+    }
+
+    static func dominantModel(_ events: [UsageEvent]) -> String? {
+        var counts: [String: Int] = [:]
+        for e in events where e.model != "unknown" { counts[e.model, default: 0] += 1 }
+        return counts.max { $0.value < $1.value }?.key
     }
 
     /// Distance in seconds to the closest time in a sorted array (binary search).
@@ -239,6 +265,29 @@ public enum CostModel {
 
 /// `goldiectl usage`: check the Cursor usage connection. Prints shapes and totals, never the token.
 public enum UsageDiagnostics {
+    /// Candidate month totals, to compare with cursor.com → Usage (refresh it first, month-to-date).
+    static func reconciliation(_ events: [UsageEvent], now: Date) -> [String] {
+        func usd(_ cents: Double) -> String { String(format: "$%.2f", cents / 100) }
+        let raw = events.reduce(0) { $0 + $1.cents }
+        let discounted = events.reduce(0) { $0 + $1.cents * (1 - ($1.discountPercent ?? 0) / 100) }
+        let chargeableOnly = events.filter(\.chargeable).reduce(0) { $0 + $1.cents }
+        let charged = events.compactMap(\.chargedCents)
+        let discounts = Set(events.compactMap(\.discountPercent).map { String(format: "%.2f%%", $0) }).sorted()
+        let utcStart: Date = {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+            return cal.dateInterval(of: .month, for: now)?.start ?? now
+        }()
+        let fromUTC = events.filter { $0.at >= utcStart }.reduce(0) { $0 + $1.cents }
+        var lines = ["", "# Month total candidates (which one matches cursor.com → Usage, refreshed just now?)"]
+        lines.append("  A raw totalCents (what Goldie shows now):   \(usd(raw))")
+        lines.append("  B after enterpriseUsageDiscountPercent:     \(usd(discounted))   discount values seen: \(discounts.isEmpty ? "none" : discounts.joined(separator: ", "))")
+        lines.append("  C chargeable events only:                   \(usd(chargeableOnly))   (\(events.filter { !$0.chargeable }.count) not chargeable)")
+        lines.append("  D sum of chargedCents:                      \(charged.isEmpty ? "n/a" : usd(charged.reduce(0, +)))   (\(charged.count) events have it)")
+        lines.append("  (checked at \(ISO8601DateFormatter().string(from: now)); month starts local \(ISO8601DateFormatter().string(from: UsageLedger.monthStart(now))), UTC month so far: \(usd(fromUTC)))")
+        return lines
+    }
+
     public static func report(dbPath: String = Paths.cursorStateDB.path) async -> String {
         var out = ["== Goldie usage check (no secrets printed) =="]
         let client = CursorUsageClient(dbPath: dbPath)
@@ -276,6 +325,7 @@ public enum UsageDiagnostics {
                 let month = all.reduce(0) { $0 + $1.cents } / 100
                 let today = all.filter { $0.at >= Calendar.current.startOfDay(for: now) }.reduce(0) { $0 + $1.cents } / 100
                 out.append("this month: \(all.count) events, $\(String(format: "%.2f", month)); today: $\(String(format: "%.2f", today))")
+                out.append(contentsOf: reconciliation(all, now: now))
             }
         } catch {
             out.append("!! request failed: \(error)")

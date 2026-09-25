@@ -46,6 +46,11 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     /// Context size of the very first request: what a chat costs before you've typed anything.
     public var startTokens: Int? = nil
 
+    /// The exact model Cursor billed for the latest request (e.g. "grok-4.7-high-fast").
+    public var billedModel: String? = nil
+    /// Model as billed if known, else the chat's setting.
+    public var effectiveModel: String? { billedModel ?? model }
+
     /// Folder the chat works in (from Cursor hooks); handoff docs are written there.
     public var workspace: String? = nil
     /// Times Goldie's guards stopped a wasteful step in this chat.
@@ -146,7 +151,8 @@ public enum Signals {
         snap.activityTimes = activity
         snap.tasks = TaskSegmenter.segments(threadID: id, model: model, bubbles: bubbles, running: running, now: now)
         // Measure the tool *result* only (not args, attachments or internal copies of the message).
-        if let biggest = bubbles.filter(\.isTool).max(by: { $0.resultLength < $1.resultLength }), biggest.resultLength >= 40_000 {
+        if let biggest = bubbles.filter({ $0.isTool && !$0.resultIsImage }).max(by: { $0.resultLength < $1.resultLength }),
+           biggest.resultLength >= 40_000 {
             snap.bloatTokens = biggest.resultLength / 4
             snap.bloatLabel = biggest.filePath.map { ($0 as NSString).lastPathComponent }
                 ?? biggest.command.map { cmd in
