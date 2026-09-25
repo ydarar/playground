@@ -410,11 +410,16 @@ final class GoldieEngine: ObservableObject {
     var setPanelVisible: ((Bool) -> Void)?
     private var hiddenUntil: Date?
     private var hiddenUntilNeeded = false
+    /// What was already going on when you hid her; only something *new* brings her back.
+    private var alarmedWhenHidden = false
+    private var targetWhenHidden: String?
 
     func hide(_ mode: HideMode) {
         expanded = false
         hiddenUntil = mode == .forAnHour ? Date().addingTimeInterval(3600) : nil
         hiddenUntilNeeded = mode == .untilNeeded
+        alarmedWhenHidden = verdict.mood == .alarmed
+        targetWhenHidden = verdict.targetThread
         setPanelVisible?(false)
         let hint: String
         switch mode {
@@ -435,8 +440,15 @@ final class GoldieEngine: ObservableObject {
     /// Called every poll: bring her back when the hour is up or something needs you.
     private func maybeReappear(_ verdict: Verdict, now: Date) {
         guard !panelVisible else { return }
-        if let until = hiddenUntil, now >= until { showGoldie() }
-        else if hiddenUntilNeeded, verdict.speak || verdict.mood == .alarmed { showGoldie() }
+        if let until = hiddenUntil, now >= until {
+            showGoldie()
+        } else if hiddenUntilNeeded {
+            let newNudge = verdict.speak && verdict.targetThread != targetWhenHidden
+            let newAlarm = verdict.mood == .alarmed && !alarmedWhenHidden
+            if newNudge || newAlarm { showGoldie() }
+            // Once the earlier alarm clears, a later one counts as new.
+            if verdict.mood != .alarmed { alarmedWhenHidden = false }
+        }
     }
 
     /// Hidden Goldie can't show a toast, so the menu shows why she's gone.

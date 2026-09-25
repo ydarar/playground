@@ -579,3 +579,4 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertTrue(label.hasPrefix("output of `python3 -c"))
     }
 }
+#endif
