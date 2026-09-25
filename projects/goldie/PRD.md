@@ -198,3 +198,55 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 - Codex credits → $: **$0.065 / credit**.
 - **Cursor first.** Day-to-day work has moved to Cursor running Grok because it's cheap, so the POC targets Cursor only. Meters and credit conversion are deferred.
 - **Brain runtime for the POC:** `mlx_lm.server` (MLX, local, OpenAI-compatible HTTP) instead of embedding `mlx-swift`. Same model, far less integration risk. Embedding can come later.
+
+## 11. v1 scope & sign-off
+
+**v1 = Cursor-only Goldie, for personal use.**
+
+**In v1 (built):**
+- **Sensors:** Cursor hooks (observe-only) plus a read-only reader for Cursor's state DB, with an incremental message cache.
+- **Real costs from Cursor usage:**
+  - today and month totals;
+  - per chat: spent, last task, per step;
+  - month projection against the budget, with a silent "stressed" mood when the month runs hot.
+- **Signals:** context size, loops and re-asks, parallel chats, big reads, heavy starting context.
+- **Brain:** a local non-Chinese model (Llama 3.2 3B via MLX) with a rules fallback, plus guardrails (speech budget, "Not now", alarms can't be hidden).
+- **Start fresh:** handoff for any selected chat, then Cursor is brought forward.
+- **Cost per task, by kind of work:**
+  - an evidence-gated model scorecard and advice, which can recommend a pricier model;
+  - a bloat detector and a setup tip.
+- **UI:**
+  - budget bar;
+  - details card (verdict, sorted chats, context meters, legend, setup checklist);
+  - hover peek, sizes, remembered position, Reduce Motion support;
+  - menu bar with today's $.
+- **Model policy:** no Chinese-vendor models, for Goldie's brain or for flagged Cursor chats.
+
+**Deferred to v2:**
+- **Codex and Claude Code sensors and meters.** Codex is ~97% of total spend, so v1 alone won't close the $20k → $800 gap.
+- Keychain.
+- Final art (Rive).
+- DevBar log reader.
+- Price tag before Enter (Cursor before-submit hook).
+- Savings scoreboard.
+- Embedded `mlx-swift`.
+
+**Sign-off checklist:**
+
+| # | Item | Owner | Blocking? |
+|---|---|---|---|
+| 1 | `swift build -c release` and `swift test` pass on the Mac at the latest commit | Yasin → Claude fixes | Yes |
+| 2 | Send `goldiectl probe` and `goldiectl usage` output; Claude corrects schema assumptions (message timestamps, token fields, hook payloads, usage endpoint). Costs and task tracking depend on these. | Yasin → Claude | Yes |
+| 3 | 3–5 day soak: note wrong or missed nudges; Claude tunes thresholds and wording | Yasin → Claude | Yes |
+| 4 | Package `Goldie.app`: double-click to run, launch at login, no Terminal needed | Claude | Yes |
+| 5 | Privacy pass: Cursor token never logged or stored; hooks observe-only; one-step uninstall that removes hooks and local data | Claude | Yes |
+| 6 | Brain: confirm the Llama model runs (or accept rules-only) | Yasin | No |
+| 7 | Docs: README install/uninstall, PRD final | Claude | No |
+| 8 | Open a PR into `main`, review, merge | Yasin | Yes |
+
+**Exit criteria:**
+- Clean build and tests.
+- Goldie's month total within ~5% of Cursor's dashboard.
+- Start fresh works end to end.
+- At most ~1 unwanted nudge a day during the soak.
+- No Chinese-vendor models anywhere.
