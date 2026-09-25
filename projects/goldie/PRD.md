@@ -4,7 +4,18 @@
 
 ## 1. Problem
 
-My enterprise AI allowance is **$800/month**, measured in API cost through our Bedrock LLM gateway. I currently spend **~$20,000/month**, so I need a **25× reduction**.
+My enterprise AI allowance is **$800/month**, measured in API cost. I currently spend **~$20,000/month**, so I need a **25× reduction**.
+
+**Where the money actually goes (Sep 2026 month-to-date, as of the 25th):**
+
+| Harness | MTD | Share |
+|---|---|---|
+| Codex | $18,195.83 (279,936 credits) | **~97%** |
+| Cursor | ~$412 | ~2% |
+| Claude | ~$79 | <1% |
+| **Total** | **~$18,687**, on pace for ~$22.4k/month | |
+
+**Codex is the problem.** Even if Cursor and Claude went to zero, Codex alone is ~23× over budget.
 
 The single biggest leak is **long-running agent threads**. LLMs are stateless, so every turn re-sends the full context: system prompt, files read, tool output and all earlier turns. The cost of turn *n* is roughly `context_n × input price`, and context only grows, so **the total cost of a thread grows roughly with the square of its length**. Prompt caching helps (cached re-reads are cheap), but it doesn't remove this. A fresh task with a tight handoff is often far cheaper than one more turn in a bloated thread.
 
@@ -87,7 +98,7 @@ All signals are computed **deterministically and locally**. They're cheap, testa
 | `cost_ratio` | `next_turn_cost / fresh_start_cost`, the core "start fresh" signal |
 | `thread_cost` | Cumulative $ of this thread |
 | `loop_score` | Autonomous tool calls since the last user message, plus repetition (same file edited or same test run N times, same error text) |
-| `model_tier` | Premium model or Max Mode vs standard |
+| `model_tier` | Premium model, Max Mode, or high reasoning effort (Codex `model_reasoning_effort`) vs standard |
 | `parallel_agents` | Threads active in the last N minutes, and their combined $/min |
 | `month_to_date` / `projected` | From the gateway (ground truth), with a linear or workday projection vs $800 |
 | `daily_allowance` | `(800 − MTD) / remaining workdays` |
@@ -125,7 +136,7 @@ There are **three separate meters, not one API**. Goldie adds them up.
 |---|---|---|---|
 | **Claude** | LLM Gateway (LiteLLM): `GET /key/info` (key spend/budget) and `GET /v2/user/info` (user spend/budget) | LLMG virtual key, `Authorization: Bearer …` | Claude is the **only** harness on this key, since traffic is tagged `x-sf-ai-harness-client-id: claude`. So every $ on this key is Claude Code. `/user/daily/activity` returns **403** for virtual keys, so there's no server-side daily or tag breakdown. |
 | **Cursor** | Cursor `GET /api/usage-summary` (amounts in **cents**) | Signed-in Cursor session | Not on the gateway. Cursor's own billing. |
-| **Codex** | ChatGPT **credits** | ChatGPT login | No known usage URL. The known sources are DevBar's `Codex usage fetched … credits` log line, or Codex Settings → Usage. Needs a **credits → $ rate** in config. |
+| **Codex** | ChatGPT **credits** | ChatGPT login | No known usage URL. The known sources are DevBar's `Codex usage fetched … credits` log line, or Codex Settings → Usage. Rate: **$0.065 / credit**, derived from DevBar ($18,195.83 ÷ 279,936). Stored in config in case it changes. |
 
 **DevBar already reads all three.** v1 option: **tail DevBar's log** instead of re-implementing three auth flows. Goldie then only needs to parse the log. Direct providers stay as a fallback if DevBar isn't running.
 
@@ -178,8 +189,11 @@ Hook CLIs never block the harness. They append to a local socket or spool file a
 | **M5 Goldie** | Final pop-funk Goldie + bowl art, a Rive state machine for every mood and the bowl encodings. | Looks good enough to leave on all day |
 
 ## 10. Open questions
-1. **Codex credits → $:** what's the conversion rate? Which of the three meters makes up most of the ~$20k? (Today's snapshot: Claude ≈ $79, Cursor ≈ $412, Codex ≈ 280k credits.)
-2. Are those meter values **month-to-date or lifetime**? LiteLLM key spend is lifetime unless the key has a budget reset period.
-3. **DevBar log:** path, format, how often it refreshes, and is DevBar always running?
-4. Is the $800 per calendar month, or on a billing-cycle date?
-5. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
+1. **DevBar log:** path, format, how often it refreshes, and is DevBar always running?
+2. **Adapter priority:** Codex is ~97% of spend, so the Codex sensor should probably ship first (v1), ahead of Cursor.
+3. Is the $800 per calendar month (assumed), or on a billing-cycle date?
+4. Which MLX model is "smart enough"? We'll evaluate 2–3 candidates on recorded snapshots in M2.
+
+### Resolved
+- Meters report **monthly** (month-to-date) values.
+- Codex credits → $: **$0.065 / credit**.
