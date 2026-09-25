@@ -124,11 +124,11 @@ final class GoldieEngine: ObservableObject {
         let from = ledger.fetchStart(now: now)
         Task { @MainActor [weak self] in
             do {
-                let events = try await client.fetchAll(since: from, until: Date())
+                let (events, complete) = try await client.fetchAll(since: from, until: Date())
                 guard let self else { return }
                 self.ledger.merge(events, now: Date())
-                self.usageStatus = "connected"
-                self.apply(self.rawSnapshot)
+                self.usageStatus = complete ? "connected" : "connected (month total incomplete: too many events)"
+                if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
             } catch {
                 self?.usageStatus = "unavailable: \(error)"
             }

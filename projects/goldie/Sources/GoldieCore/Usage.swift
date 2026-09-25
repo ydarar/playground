@@ -109,7 +109,8 @@ public final class CursorUsageClient {
         return ((response as? HTTPURLResponse)?.statusCode ?? 0, J.obj(data))
     }
 
-    public func fetchAll(since: Date, until: Date, maxPages: Int = 40) async throws -> [UsageEvent] {
+    /// `complete` is false if we hit the page cap before running out of events (totals would be low).
+    public func fetchAll(since: Date, until: Date, maxPages: Int = 150) async throws -> (events: [UsageEvent], complete: Bool) {
         var all: [UsageEvent] = []
         let pageSize = 100
         for page in 1...maxPages {
@@ -117,9 +118,9 @@ public final class CursorUsageClient {
             guard status == 200, let body else { throw GoldieError("Cursor usage API returned HTTP \(status)") }
             let events = Self.parseEvents(body)
             all += events
-            if events.count < pageSize { break }
+            if events.count < pageSize { return (all, true) }
         }
-        return all
+        return (all, false)
     }
 
     static func parseEvents(_ body: [String: Any]) -> [UsageEvent] {
@@ -254,7 +255,8 @@ public enum UsageDiagnostics {
             for e in events { byModel[e.model, default: 0] += 1 }
             out.append("models: \(byModel.map { "\($0.key)(\($0.value))" }.sorted().joined(separator: " "))")
             if status == 200 {
-                let all = try await client.fetchAll(since: UsageLedger.monthStart(now), until: now)
+                let (all, complete) = try await client.fetchAll(since: UsageLedger.monthStart(now), until: now)
+                if !complete { out.append("!! hit the page cap; month total below is incomplete") }
                 let month = all.reduce(0) { $0 + $1.cents } / 100
                 let today = all.filter { $0.at >= Calendar.current.startOfDay(for: now) }.reduce(0) { $0 + $1.cents } / 100
                 out.append("this month: \(all.count) events, $\(String(format: "%.2f", month)); today: $\(String(format: "%.2f", today))")
