@@ -322,4 +322,27 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(snap.bloatLabel, "server.log")
         XCTAssertEqual(snap.bloatTokens, 20_000)
     }
+
+    func testTaskStoreKeepsModelAndNeverLowersCost() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-tasks-\(UUID()).jsonl")
+        let store = TaskStore(file: url)
+        let original = task("grok-4.7", cost: 2.0, i: 0)
+        store.record([original], now: now)
+
+        var later = original
+        later.model = "other-model"  // chat switched models afterwards
+        later.costUSD = 0.5          // only part of its charges still in the matching window
+        store.record([later], now: now)
+        XCTAssertEqual(store.tasks[original.id]?.model, "grok-4.7")
+        XCTAssertEqual(store.tasks[original.id]?.costUSD, 2.0)
+
+        later.costUSD = 2.3          // a late charge arrived
+        store.record([later], now: now)
+        XCTAssertEqual(store.tasks[original.id]?.costUSD, 2.3)
+
+        var ancient = task("x", cost: 1, i: 1)
+        ancient.end = now.addingTimeInterval(-5 * 3600)  // Goldie didn't see this one happen
+        store.record([ancient], now: now)
+        XCTAssertNil(store.tasks[ancient.id])
+    }
 }

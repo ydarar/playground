@@ -123,10 +123,27 @@ public final class TaskStore {
 
     public var all: [TaskSegment] { Array(tasks.values) }
 
-    /// Keeps only finished tasks with a known cost; later updates (late usage events) replace earlier ones.
+    /// Keeps only finished tasks with a known cost.
+    /// - A task is first recorded only if it ended recently: Goldie saw it happen, so the chat's
+    ///   current model is the model it ran on (a later model switch can't relabel history).
+    /// - Once stored, its model and kind never change; cost only grows (late charges), never shrinks
+    ///   (older tasks can fall outside the time window used to match charges).
     public func record(_ segments: [TaskSegment], now: Date) {
-        for s in segments where s.complete && s.costUSD != nil {
-            if tasks[s.id] != s {
+        for s in segments where s.complete {
+            guard let cost = s.costUSD else { continue }
+            if var existing = tasks[s.id] {
+                let merged = max(existing.costUSD ?? 0, cost)
+                let steps = max(existing.steps, s.steps)
+                let reasked = existing.reasked || s.reasked
+                if merged != existing.costUSD || steps != existing.steps || reasked != existing.reasked {
+                    existing.costUSD = merged
+                    existing.steps = steps
+                    existing.reasked = reasked
+                    existing.maxRepeat = max(existing.maxRepeat, s.maxRepeat)
+                    tasks[s.id] = existing
+                    dirty = true
+                }
+            } else if now.timeIntervalSince(s.end) < 2 * 3600 {
                 tasks[s.id] = s
                 dirty = true
             }
