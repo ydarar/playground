@@ -113,6 +113,7 @@ public struct JudgeContext {
     public var nudges: [NudgeRecord]
     public var snoozed: Set<String>
     public var now: Date
+    public var budgetUSD: Double = 800
 }
 
 /// Owns the non-negotiable guardrails around whichever brain proposed a verdict:
@@ -157,7 +158,8 @@ public final class Judge {
     }
 
     public func context(for snap: Snapshot, heuristic: Verdict, now: Date) -> JudgeContext {
-        JudgeContext(snapshot: snap, heuristic: heuristic, nudges: Array(nudges.suffix(6)), snoozed: snoozed(now: now), now: now)
+        JudgeContext(snapshot: snap, heuristic: heuristic, nudges: Array(nudges.suffix(6)), snoozed: snoozed(now: now), now: now,
+                     budgetUSD: config.monthlyBudgetUSD)
     }
 
     public func finalize(_ proposed: Verdict, heuristic: Verdict, snapshot: Snapshot, now: Date) -> Verdict {

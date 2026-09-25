@@ -259,10 +259,13 @@ final class GoldieEngine: ObservableObject {
 
     /// After "Start fresh", put Cursor in front so the paste is one keystroke away.
     private static func bringCursorForward() {
-        let cursor = NSWorkspace.shared.runningApplications.first {
-            $0.localizedName == "Cursor" || ($0.bundleIdentifier ?? "").lowercased().contains("cursor")
-        }
-        cursor?.activate()
+        // A background (accessory) app can't pull another app forward with activate() on macOS 14+;
+        // asking the system to open the app works.
+        let running = NSWorkspace.shared.runningApplications.first { $0.localizedName == "Cursor" }
+        guard let url = running?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.todesktop.230313mzl4w4u92") else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: nil)
     }
 
     func dismissSpeech() { speech = nil }
