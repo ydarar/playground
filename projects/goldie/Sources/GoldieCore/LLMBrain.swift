@@ -28,6 +28,10 @@ public final class LLMBrain {
     - loop signals: steps_since_user_message, max_repeat_command, max_repeat_file_edit, loop_score (0-1)
     - running, minutes_idle, model, max_mode, parallel_threads, today_usd, month_usd, projected_month_usd \
     (monthly budget: budget_usd; "stressed" = month on pace to exceed it with no single chat to blame)
+    - current_task_kind, biggest_single_read_tokens (one huge file/log re-sent every step)
+    - model_fit_tip: evidence from the user's OWN history of cost per finished task by kind of work.
+      Never suggest switching models unless model_fit_tip is present; a cheaper-per-token model can cost
+      more per task. Only relay the tip when the chat is doing that kind of work.
     plus a rules-based suggestion and recent nudges with the user's feedback.
 
     Decide Goldie's mood and whether it should speak. Guidance:
@@ -89,6 +93,11 @@ public final class LLMBrain {
             if let cost = t.nextTurnCostUSD { d["cost_per_step_usd"] = (cost * 1000).rounded() / 1000 }
             if let spent = t.spentUSD { d["spent_usd"] = (spent * 100).rounded() / 100 }
             if let last = t.lastMessageUSD { d["last_message_usd"] = (last * 100).rounded() / 100 }
+            if let kind = t.currentKind {
+                d["current_task_kind"] = kind.rawValue
+                if let tip = ModelFit.advice(kind: kind, model: t.model, stats: ctx.modelStats) { d["model_fit_tip"] = tip }
+            }
+            if t.bloatTokens > 0 { d["biggest_single_read_tokens"] = t.bloatTokens }
             threads.append(d)
         }
         let nudges: [[String: Any]] = ctx.nudges.map { n in

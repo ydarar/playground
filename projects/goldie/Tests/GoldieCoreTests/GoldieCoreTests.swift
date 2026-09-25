@@ -232,4 +232,94 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertNil(ModelPolicy.blockedKeyword(for: nil, keywords: k))
         XCTAssertEqual(GoldieConfig().llm.model, "mlx-community/Llama-3.2-3B-Instruct-4bit")
     }
+
+    // MARK: Tasks & model fit
+
+    private func bubble(user: Bool = false, text: String = "", at: Double, command: String? = nil,
+                        edit: String? = nil, length: Int = 100) -> CursorBubble {
+        CursorBubble(isUser: user, isTool: command != nil || edit != nil, isEdit: edit != nil, text: text,
+                     toolName: edit != nil ? "edit_file" : (command != nil ? "run_terminal_cmd" : nil),
+                     command: command, filePath: edit, inputTokens: nil,
+                     createdAt: now.addingTimeInterval(at), textLength: length)
+    }
+
+    func testTaskKindClassification() {
+        XCTAssertEqual(TaskKind.classify(text: "Fix the failing login test", edits: 2, commands: 3), .debugging)
+        XCTAssertEqual(TaskKind.classify(text: "Rename UserService to AccountService", edits: 5, commands: 0), .refactor)
+        XCTAssertEqual(TaskKind.classify(text: "How would you structure the cache?", edits: 0, commands: 0), .planning)
+        XCTAssertEqual(TaskKind.classify(text: "Look through the payments module", edits: 0, commands: 0), .exploring)
+        XCTAssertEqual(TaskKind.classify(text: "Add dark mode to settings", edits: 4, commands: 1), .feature)
+    }
+
+    func testSegmentsSplitOnUserMessagesAndDetectReask() {
+        let bubbles = [
+            bubble(user: true, text: "Fix the flaky upload test", at: -600),
+            bubble(at: -590, command: "npm test"),
+            bubble(at: -580, edit: "upload.ts"),
+            bubble(at: -570, command: "npm test"),
+            bubble(user: true, text: "still failing, try again", at: -500),
+            bubble(at: -490, command: "npm test"),
+        ]
+        let segs = TaskSegmenter.segments(threadID: "a", model: "grok-4.7", bubbles: bubbles, running: true, now: now)
+        XCTAssertEqual(segs.count, 2)
+        XCTAssertEqual(segs[0].kind, .debugging)
+        XCTAssertEqual(segs[0].steps, 3)
+        XCTAssertEqual(segs[0].maxRepeat, 2)
+        XCTAssertTrue(segs[0].complete)
+        XCTAssertTrue(segs[0].reasked)
+        XCTAssertFalse(segs[1].complete)  // agent still running
+    }
+
+    private func task(_ model: String, kind: TaskKind = .debugging, cost: Double, troubled: Bool = false, i: Int) -> TaskSegment {
+        TaskSegment(threadID: "\(model)-\(i)", model: model, kind: kind, start: now.addingTimeInterval(Double(-i * 600)),
+                    end: now, steps: 10, maxRepeat: troubled ? 3 : 0, complete: true, reasked: false, costUSD: cost)
+    }
+
+    func testModelFitCanRecommendThePricierModel() {
+        // Cheap model: $1/task but half its tasks loop → $2 per task that worked.
+        // Pricier model: $1.40/task, no loops → $1.40. Recommend the pricier one.
+        var tasks: [TaskSegment] = []
+        for i in 0..<6 { tasks.append(task("cheap-model", cost: 1.0, troubled: i % 2 == 0, i: i)) }
+        for i in 0..<6 { tasks.append(task("strong-model", cost: 1.4, i: i + 10)) }
+        let stats = ModelFit.stats(tasks, since: now.addingTimeInterval(-86400 * 30))
+        let advice = ModelFit.advice(kind: .debugging, model: "cheap-model", stats: stats)
+        XCTAssertNotNil(advice)
+        XCTAssertTrue(advice?.contains("strong-model") ?? false)
+        XCTAssertNil(ModelFit.advice(kind: .debugging, model: "strong-model", stats: stats))
+    }
+
+    func testModelFitStaysQuietWithoutEvidence() {
+        var tasks: [TaskSegment] = []
+        for i in 0..<6 { tasks.append(task("a-model", cost: 2.0, i: i)) }
+        for i in 0..<3 { tasks.append(task("b-model", cost: 0.5, i: i + 10)) }  // too few tasks
+        let stats = ModelFit.stats(tasks, since: now.addingTimeInterval(-86400 * 30))
+        XCTAssertNil(ModelFit.advice(kind: .debugging, model: "a-model", stats: stats))
+        // Different kind of work: no cross-kind advice.
+        XCTAssertNil(ModelFit.advice(kind: .refactor, model: "a-model", stats: stats))
+    }
+
+    func testTaskStorePersistsFinishedPricedTasks() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("goldie-tasks-\(UUID()).jsonl")
+        let store = TaskStore(file: url)
+        var unfinished = task("m", cost: 1, i: 1)
+        unfinished.complete = false
+        var unpriced = task("m", cost: 1, i: 2)
+        unpriced.costUSD = nil
+        store.record([task("m", cost: 1, i: 0), unfinished, unpriced], now: now)
+        store.save(now: now)
+        XCTAssertEqual(TaskStore(file: url).all.count, 1)
+    }
+
+    func testBloatDetection() {
+        let bubbles = [
+            bubble(user: true, text: "read the log", at: -100),
+            CursorBubble(isUser: false, isTool: true, isEdit: false, text: "", toolName: "read_file", command: nil,
+                         filePath: "/tmp/server.log", inputTokens: nil, createdAt: now, textLength: 80_000),
+        ]
+        let t = CursorThread(id: "a", title: "t", model: "grok-4.7", maxMode: false, createdAt: nil, lastUpdatedAt: now,
+                             reportedContextTokens: nil, bubbles: bubbles)
+        let snap = Signals.build(id: "a", thread: t, hook: nil, config: GoldieConfig(), now: now)
+        XCTAssertEqual(snap.bloatLabel, "server.log")
+        XCTAssertEqual(snap.bloatTokens, 20_000)
+    }
 }

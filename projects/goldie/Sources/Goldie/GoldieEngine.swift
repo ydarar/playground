@@ -59,6 +59,14 @@ final class GoldieEngine: ObservableObject {
     private var lastFingerprint = ""
     private var llmVerdict: (verdict: Verdict, fingerprint: String, at: Date)?
 
+    /// Finished tasks with their cost, kept on disk: the evidence behind model advice.
+    private let taskStore = TaskStore()
+    /// Cost per finished task by model and kind of work (last 30 days).
+    @Published private(set) var modelStats: [ModelStats] = []
+    /// Account-wide advice (e.g. every chat starts heavy because of rules/MCP setup).
+    @Published private(set) var setupTip: String?
+    private var startTokensSeen: [String: Int] = [:]
+
     /// Collector output before costs are attached.
     private var rawSnapshot = Snapshot.empty
     private var ledger = UsageLedger()
@@ -170,6 +178,7 @@ final class GoldieEngine: ObservableObject {
         rawSnapshot = raw
         let snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
         snapshot = snap
+        learn(from: snap, now: now)
         judge.observe(snap, now: now)
         let heuristic = judge.heuristic(snap, now: now)
         let fingerprint = Judge.fingerprint(snap)
@@ -199,7 +208,9 @@ final class GoldieEngine: ObservableObject {
         guard let llm else { return }
         llmInFlight = true
         lastLLMAt = now
-        let ctx = judge.context(for: snap, heuristic: heuristic, now: now)
+        var context = judge.context(for: snap, heuristic: heuristic, now: now)
+        context.modelStats = modelStats
+        let ctx = context
         Task { @MainActor [weak self] in
             let result = await llm.judge(ctx)
             guard let self else { return }
@@ -214,6 +225,36 @@ final class GoldieEngine: ObservableObject {
                 self.brainStatus = "rules (LLM unreachable)"
             }
         }
+    }
+
+    // MARK: Learning
+
+    private func learn(from snap: Snapshot, now: Date) {
+        taskStore.record(snap.threads.flatMap(\.tasks), now: now)
+        let stats = ModelFit.stats(taskStore.all, since: now.addingTimeInterval(-30 * 24 * 3600))
+        if stats != modelStats { modelStats = stats }
+        for t in snap.threads { if let s = t.startTokens { startTokensSeen[t.id] = s } }
+        let tip = computeSetupTip(now: now)
+        if tip != setupTip { setupTip = tip }
+    }
+
+    /// If chats typically start heavy, the fix is in setup (rules, AGENTS.md, MCP tools), not in any one chat.
+    private func computeSetupTip(now: Date) -> String? {
+        let starts = startTokensSeen.values.sorted()
+        guard starts.count >= 3 else { return nil }
+        let median = starts[starts.count / 2]
+        guard median >= 20_000 else { return nil }
+        var tip = "Your chats start at ~\(median / 1000)k tokens before you type anything: rules files, AGENTS.md and MCP tools, re-sent on every step."
+        if let rate = ledger.centsPerToken(now: now)["*"] {
+            let stepsToday = ledger.events.filter { $0.at >= Calendar.current.startOfDay(for: now) }.count
+            let saving = 10_000 * rate * Double(stepsToday) / 100
+            if saving >= 0.01 { tip += String(format: " Trimming 10k tokens would have saved ~$%.2f today.", saving) }
+        }
+        return tip
+    }
+
+    func shutdown() {
+        taskStore.save(now: Date())
     }
 
     // MARK: Actions

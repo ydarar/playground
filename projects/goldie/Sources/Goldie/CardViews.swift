@@ -160,6 +160,7 @@ struct DetailsCard: View {
             BudgetSection(snapshot: engine.snapshot, budget: engine.config.monthlyBudgetUSD, usageStatus: engine.usageStatus)
             goldieSays
             threadList
+            TipsSection(engine: engine)
             footer
             if showLegend { Legend() }
         }
@@ -421,10 +422,16 @@ struct ThreadRow: View {
                 }
                 Text(metaLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 ContextMeter(label: meterLabel, fraction: clamp01(thread.contextRatio / max(engine.config.alarmedRatio, 1)), color: color)
-                if let advice = adviceLine {
-                    Text(advice)
+                if let warning = warningLine {
+                    Text(warning)
                         .font(.caption)
-                        .foregroundStyle(severity == 0 ? Color.secondary : color)
+                        .foregroundStyle(color == .green ? Color.orange : color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let tip = tipLine {
+                    Text(tip)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if isSelected {
@@ -453,12 +460,14 @@ struct ThreadRow: View {
         isSelected ? "Selected. Click again to deselect." : "Click to select this chat"
     }
 
-    /// "grok-4.7 · spent $4.10 · last msg $1.40 · ~$0.12/step"
+    /// "debugging · grok-4.7 · spent $4.10 · last task $1.40 · ~$0.12/step"
     private var metaLine: String {
-        var parts = [thread.model ?? "unknown model"]
+        var parts: [String] = []
+        if let kind = thread.currentKind { parts.append(kind.rawValue) }
+        parts.append(thread.model ?? "unknown model")
         if thread.maxMode { parts.append("Max Mode") }
         if let spent = thread.spentUSD { parts.append("spent \(Fmt.usd(spent))") }
-        if let last = thread.lastMessageUSD, last > 0 { parts.append("last msg \(Fmt.usd(last))") }
+        if let last = thread.lastMessageUSD, last > 0 { parts.append("last task \(Fmt.usd(last))") }
         if let step = thread.nextTurnCostUSD {
             parts.append("~\(Fmt.usd(step))/step" + (thread.costSource == "cursor" ? "" : " est."))
         }
@@ -470,8 +479,8 @@ struct ThreadRow: View {
         return "\(approx)\(Fmt.tokens(thread.contextTokens)) re-read/step"
     }
 
-    /// The one thing worth knowing, in plain words.
-    private var adviceLine: String? {
+    /// Something is wrong right now.
+    private var warningLine: String? {
         if ModelPolicy.blockedKeyword(for: thread.model, keywords: engine.config.blockedModelKeywords) != nil {
             return "⛔︎ Uses \(thread.model ?? "a blocked model"), a Chinese-vendor model. Switch to an approved model."
         }
@@ -483,6 +492,18 @@ struct ThreadRow: View {
         }
         if thread.toolCallsSinceUser >= 15 {
             return "⚠︎ \(thread.toolCallsSinceUser) steps since your last message."
+        }
+        return nil
+    }
+
+    /// The single most useful way to make this chat cheaper, strongest evidence first.
+    private var tipLine: String? {
+        if let kind = thread.currentKind,
+           let fit = ModelFit.advice(kind: kind, model: thread.model, stats: engine.modelStats) {
+            return "💡 " + fit
+        }
+        if thread.bloatTokens >= 10_000, let label = thread.bloatLabel {
+            return "📄 \(label) (~\(Fmt.tokens(thread.bloatTokens)) tokens) is re-sent on every step. Next time ask for just the lines you need, or start fresh."
         }
         if thread.contextRatio >= 2 {
             return "A new chat would be ~\(Int(thread.contextRatio.rounded()))× cheaper per step."
@@ -523,7 +544,9 @@ struct Legend: View {
             item("Step", "One call to the model. A single message can trigger many steps: read a file, run a command, edit, and so on.")
             item("Re-read/step bar", "The agent re-sends the whole chat on every step, so long chats pay for their history again and again. Full bar = time to start fresh.")
             item("A new chat would be ~N× cheaper", "Compared with a fresh chat that starts from a short handoff (~15k tokens).")
-            item("Spent · last msg · per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. \"est.\" = estimated from tokens.")
+            item("Spent · last task · per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. A task is one message plus everything the agent did for it. \"est.\" = estimated from tokens.")
+            item("💡 Model advice", "Only from your own history: cost per task that actually worked, by kind of work. A cheaper-per-step model can cost more per task if it loops or needs redoing, so Goldie compares whole tasks and needs 5+ tasks on each side.")
+            item("📄 Big reads", "One huge file or log in a chat is re-sent on every later step. Asking for just the lines you need keeps chats light.")
             item("Budget bar & water level", "Month spend vs your budget. The tick shows where even spending would put you today. Goldie's water drains as you spend.")
             item("Start fresh", "Copies a handoff (goal, files, where things stand) and brings Cursor forward. Paste it into a new chat.")
             item("Selecting a chat", "Click any chat to point the fresh bowl and Start fresh at it. Without a selection they follow Goldie's pick.")
@@ -538,5 +561,64 @@ struct Legend: View {
             Text(title).fontWeight(.semibold)
             Text(text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Account-wide tips and the model scorecard (your cost per finished task, by kind of work).
+struct TipsSection: View {
+    @ObservedObject var engine: GoldieEngine
+    @State private var showScorecard = false
+
+    var body: some View {
+        if engine.setupTip != nil || !engine.modelStats.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                if let tip = engine.setupTip {
+                    Text("⚙︎ " + tip).font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+                if !engine.modelStats.isEmpty {
+                    Button(showScorecard ? "Hide model scorecard" : "Model scorecard: what each model costs you per task") {
+                        withAnimation(.easeInOut(duration: 0.2)) { showScorecard.toggle() }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    if showScorecard { ModelScorecard(stats: engine.modelStats) }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
+        }
+    }
+}
+
+struct ModelScorecard: View {
+    let stats: [ModelStats]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(TaskKind.allCases, id: \.self) { kind in
+                let rows = stats.filter { $0.kind == kind }.sorted { $0.costPerGoodTaskUSD < $1.costPerGoodTaskUSD }
+                if !rows.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(kind.label).font(.caption.weight(.semibold))
+                        ForEach(rows, id: \.model) { row in
+                            Text(line(row, best: row.model == rows.first?.model && rows.count > 1))
+                                .font(.caption2)
+                                .foregroundStyle(row.count >= ModelFit.minTasks ? Color.primary : Color.secondary)
+                        }
+                    }
+                }
+            }
+            Text("Cost per task that worked = median task cost, adjusted for tasks that looped or needed redoing. Greyed rows have under \(ModelFit.minTasks) tasks.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func line(_ s: ModelStats, best: Bool) -> String {
+        let mark = best && s.count >= ModelFit.minTasks ? "✓ " : "   "
+        return mark + String(format: "%@: $%.2f/task · %ld tasks · %.0f%% redone · ~%ld steps",
+                             s.model, s.costPerGoodTaskUSD, s.count, s.troubleRate * 100, s.medianSteps)
     }
 }

@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func togglePanel() { panel?.toggle() }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        engine.shutdown()
+    }
 }
 
 /// Menu bar shows today's Cursor spend, e.g. "🐠 $3.20".

@@ -37,6 +37,16 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     public var topRepeatedFile: String? = nil
     /// Recent agent activity timestamps, used to match usage events to this thread. Not sent to the brain.
     public var activityTimes: [Date] = []
+
+    /// Recent tasks (your message → agent done), newest last; CostModel fills in their $.
+    public var tasks: [TaskSegment] = []
+    /// Largest single tool result (a file read, a log, command output) that every later step re-sends.
+    public var bloatLabel: String? = nil
+    public var bloatTokens: Int = 0
+    /// Context size of the very first request: what a chat costs before you've typed anything.
+    public var startTokens: Int? = nil
+
+    public var currentKind: TaskKind? { tasks.last?.kind }
 }
 
 public struct Snapshot: Codable, Equatable {
@@ -120,6 +130,15 @@ public enum Signals {
         snap.topRepeatedCommand = maxCommand >= 2 ? topCommand?.key : nil
         snap.topRepeatedFile = maxFile >= 2 ? topFile?.key : nil
         snap.activityTimes = activity
+        snap.tasks = TaskSegmenter.segments(threadID: id, model: model, bubbles: bubbles, running: running, now: now)
+        if let biggest = bubbles.filter(\.isTool).max(by: { $0.textLength < $1.textLength }), biggest.textLength >= 40_000 {
+            snap.bloatTokens = biggest.textLength / 4
+            snap.bloatLabel = biggest.filePath.map { ($0 as NSString).lastPathComponent }
+                ?? biggest.command.map { "`" + String($0.prefix(30)) + "`" }
+                ?? biggest.toolName
+                ?? "a tool result"
+        }
+        snap.startTokens = bubbles.first(where: { !$0.isUser && ($0.inputTokens ?? 0) > 0 })?.inputTokens
         if snap.nextTurnCostUSD != nil { snap.costSource = "config" }
         return snap
     }

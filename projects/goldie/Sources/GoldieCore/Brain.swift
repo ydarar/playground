@@ -114,6 +114,8 @@ public struct JudgeContext {
     public var snoozed: Set<String>
     public var now: Date
     public var budgetUSD: Double = 800
+    /// Your per-task history by model and kind of work (for evidence-based model advice).
+    public var modelStats: [ModelStats] = []
 }
 
 /// Owns the non-negotiable guardrails around whichever brain proposed a verdict:

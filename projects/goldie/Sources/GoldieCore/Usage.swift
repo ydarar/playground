@@ -174,6 +174,17 @@ public enum CostModel {
                 if let lastUser = t.lastUserAt {
                     t.lastMessageUSD = events.filter { $0.at >= lastUser }.reduce(0) { $0 + $1.cents } / 100
                 }
+                // Price each task: the charges between its start and the next task's start.
+                for j in t.tasks.indices {
+                    let start = t.tasks[j].start.addingTimeInterval(-5)
+                    let end = j + 1 < t.tasks.count ? t.tasks[j + 1].start : Date.distantFuture
+                    let inTask = events.filter { $0.at >= start && $0.at < end }
+                    if !inTask.isEmpty {
+                        t.tasks[j].costUSD = inTask.reduce(0) { $0 + $1.cents } / 100
+                        t.tasks[j].steps = max(t.tasks[j].steps, inTask.count)
+                    }
+                }
+                if let lastTask = t.tasks.last?.costUSD { t.lastMessageUSD = lastTask }
                 let recent = events.suffix(3)
                 t.nextTurnCostUSD = recent.reduce(0) { $0 + $1.cents } / Double(recent.count) / 100
                 t.costSource = "cursor"
