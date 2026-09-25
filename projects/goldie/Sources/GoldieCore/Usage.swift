@@ -28,17 +28,29 @@ public struct UsageLedger {
     /// Set when a fetch hit the page cap: charges from the month start up to this date are still
     /// missing, so the next fetch goes back for them before totals are trusted.
     public private(set) var backfillUntil: Date?
+    /// Where the missing stretch starts (the capped fetch's own start, so only the gap is re-read).
+    public private(set) var backfillFrom: Date?
+    /// Backfill stopped making progress (e.g. Cursor pages oldest-first): the month total may be low.
+    public private(set) var gaveUpBackfill = false
 
     public init() {}
 
     /// Records how a fetch went. `since` is where it started; an incomplete fetch holds only its
-    /// newest events, so everything older than its oldest event still needs fetching.
+    /// newest events, so everything from `since` to its oldest event still needs fetching.
     public mutating func noteFetch(since: Date, events: [UsageEvent], complete: Bool, now: Date) {
         if complete {
-            if since <= Self.monthStart(now) { backfillUntil = nil }
-        } else if let oldest = events.map(\.at).min() {
-            backfillUntil = min(backfillUntil ?? oldest, oldest)
+            if since <= (backfillFrom ?? Self.monthStart(now)) { backfillUntil = nil; backfillFrom = nil }
+            return
         }
+        guard let oldest = events.map(\.at).min() else { return }
+        if let until = backfillUntil, oldest >= until {  // no older events came back: stop, don't loop
+            backfillUntil = nil
+            backfillFrom = nil
+            gaveUpBackfill = true
+            return
+        }
+        backfillFrom = min(backfillFrom ?? since, since)
+        backfillUntil = oldest
     }
 
     public var isEmpty: Bool { lastMergeAt == nil }
@@ -60,7 +72,8 @@ public struct UsageLedger {
     /// Re-fetch a little overlap so late-arriving events aren't missed; duplicates merge away.
     public func fetchStart(now: Date) -> Date {
         let monthStart = Self.monthStart(now)
-        guard lastMergeAt != nil, backfillUntil == nil, let last = events.last else { return monthStart }
+        if backfillUntil != nil { return max(monthStart, backfillFrom ?? monthStart) }
+        guard lastMergeAt != nil, let last = events.last else { return monthStart }
         return max(monthStart, last.at.addingTimeInterval(-15 * 60))
     }
 

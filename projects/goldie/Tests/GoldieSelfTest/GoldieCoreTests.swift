@@ -658,6 +658,12 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(ledger.fetchStart(now: now), start)  // go back to the month start, not forward
         ledger.noteFetch(since: start, events: [event(now.addingTimeInterval(-9000), cents: 1)], complete: true, now: now)
         XCTAssertNil(ledger.backfillUntil)
+
+        // A capped fetch that brings nothing older (pages oldest-first?) stops instead of looping.
+        ledger.noteFetch(since: start, events: newest, complete: false, now: now)
+        ledger.noteFetch(since: start, events: newest, complete: false, now: now)
+        XCTAssertNil(ledger.backfillUntil)
+        XCTAssertTrue(ledger.gaveUpBackfill)
     }
 
     func testNonChargeableEventWithoutChargedCentsCostsNothing() {

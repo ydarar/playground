@@ -68,8 +68,10 @@ struct MenuContent: View {
             Toggle("Big-read guard", isOn: Binding(get: { engine.config.guards.readGuard },
                                                    set: { engine.setGuard(read: $0) }))
         }
-        if !engine.modelStats.isEmpty {
-            Menu("Model scorecard") { ModelScorecardMenu(stats: engine.modelStats) }
+        Group {
+            if !engine.modelStats.isEmpty {
+                Menu("Model scorecard") { ModelScorecardMenu(stats: engine.modelStats) }
+            }
         }
         Divider()
         Group {

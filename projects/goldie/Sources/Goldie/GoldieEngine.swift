@@ -292,7 +292,8 @@ final class GoldieEngine: ObservableObject {
                 guard let self else { return }
                 self.ledger.merge(events, now: Date())
                 self.ledger.noteFetch(since: from, events: events, complete: complete, now: Date())
-                self.usageStatus = self.ledger.backfillUntil == nil ? "connected" : "connected (still loading older charges; month total is low)"
+                self.usageStatus = self.ledger.backfillUntil != nil ? "connected (still loading older charges; month total is low)"
+                    : self.ledger.gaveUpBackfill ? "connected (month total incomplete: too many events)" : "connected"
                 if self.ledger.backfillUntil != nil { self.lastUsageAt = .distantPast }  // keep going until the month is complete
                 if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
                 self.refreshChatInfo()
