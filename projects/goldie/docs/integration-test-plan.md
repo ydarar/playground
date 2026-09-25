@@ -31,8 +31,8 @@ Pass when:
 ## 2. Get the latest code
 
 ```bash
-if [ -d ~/playground/.git ]; then cd ~/playground && git fetch origin && git checkout claude/beautiful-brown-d8r9ji && git pull --ff-only;
-else git clone https://github.com/ydarar/playground.git ~/playground && cd ~/playground && git checkout claude/beautiful-brown-d8r9ji; fi
+if [ -d ~/playground/.git ]; then cd ~/playground && git fetch origin && git checkout main && git pull --ff-only;
+else git clone https://github.com/ydarar/playground.git ~/playground && cd ~/playground && git checkout main; fi
 git log --oneline -1
 ```
 
