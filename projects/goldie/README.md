@@ -103,7 +103,7 @@ Autopilot needs macOS **Accessibility** permission. Grant it to Goldie, or to th
 **Guards (opt-in, menu bar).** They use Cursor's before-shell and before-read hooks. Restart Cursor after turning one on.
 - **Loop guard:** blocks the Nth identical command in a task (default 4) when no file was edited in between, and tells the agent to change approach.
 - **Big-read guard:** refuses files over 256 KB once, telling the agent to search them. Asking again is allowed.
-- **Fail-open:** if Goldie has any problem, the hook answers "allow", so it never blocks your work by accident.
+- **Fail-open:** when Goldie is not blocking (or has any problem), the hook replies with no opinion, so Cursor's own approval rules apply and nothing is blocked or auto-approved by accident.
 
 ## Config
 
