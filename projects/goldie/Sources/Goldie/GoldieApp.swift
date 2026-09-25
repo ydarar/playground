@@ -10,7 +10,12 @@ struct GoldieApp: App {
     @AppStorage(GoldieIPC.menuBarShownKey) private var menuBarShown = true
 
     init() {
-        UserDefaults.standard.set(true, forKey: GoldieIPC.menuBarShownKey)
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: GoldieIPC.menuBarShownKey)
+        // Forget any "removed from the menu bar" AppKit remembered for an older build.
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("NSStatusItem Visible") {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     var body: some Scene {
@@ -28,12 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController?
     private var hotKey: HotKey?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationWillFinishLaunching(_ notification: Notification) {
         // Launching Goldie again while she runs just brings the running one back.
         if Self.anotherInstanceIsRunning() {
             DistributedNotificationCenter.default().postNotificationName(GoldieIPC.show, object: nil, userInfo: nil, deliverImmediately: true)
             exit(0)
         }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)  // no Dock icon; Goldie lives on the desktop + menu bar
         panel = PanelController(engine: engine)
         engine.start()
@@ -80,7 +88,8 @@ struct MenuContent: View {
             if let hint = engine.hiddenHint { Text(hint) }
         }
         Divider()
-        Button((engine.panelVisible ? "Hide Goldie" : "Show Goldie") + "  ⌃⌥⌘G") { togglePanel() }
+        Button(engine.panelVisible ? "Hide Goldie" : "Show Goldie") { togglePanel() }
+            .keyboardShortcut("g", modifiers: [.control, .option, .command])  // shown in the menu; the global key is HotKey
         Picker("Size", selection: $engine.bowlSize) {
             Text("Small").tag(130.0)
             Text("Medium").tag(170.0)

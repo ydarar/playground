@@ -19,7 +19,8 @@ final class HotKey {
             return noErr
         }, 1, &spec, context, &handler)
         let id = EventHotKeyID(signature: OSType(0x474C_4459), id: 1)  // 'GLDY'
-        RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        if status != noErr { NSLog("Goldie: couldn't register the show/hide shortcut (another app may own it): \(status)") }
     }
 
     /// ⌃⌥⌘G

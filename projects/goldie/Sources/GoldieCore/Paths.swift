@@ -28,5 +28,6 @@ public enum GoldieIPC {
     /// Shows Goldie and her menu bar item.
     public static let show = Notification.Name("com.goldie.show")
     /// Menu bar item visibility (forced back on at launch and whenever Goldie hides).
-    public static let menuBarShownKey = "goldie.menuBarShown"
+    /// No dots: @AppStorage watches the key with KVO, which reads dots as a key path.
+    public static let menuBarShownKey = "goldieMenuBarShown"
 }
