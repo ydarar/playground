@@ -261,6 +261,14 @@ struct TailShape: Shape {
 /// The silent nudge: an empty bowl of clean water. Click = copy handoff.
 struct FreshBowl: View {
     let paused: Bool
+    /// The chat this fresh start is for, so it's never ambiguous.
+    let title: String?
+
+    private var label: String {
+        guard let title, !title.isEmpty else { return "this chat?" }
+        let short = title.count > 22 ? String(title.prefix(21)) + "…" : title
+        return "“" + short + "”?"
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 20, paused: paused)) { timeline in
@@ -276,11 +284,18 @@ struct FreshBowl: View {
                 }
                 .frame(width: 64, height: 64)
                 .scaleEffect(pulse)
-                Text("fresh water?")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Capsule().fill(Color.black.opacity(0.6)))
+                VStack(spacing: 1) {
+                    Text("fresh water for")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .opacity(0.8)
+                    Text(label)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.65)))
+                .frame(maxWidth: 150)
             }
             .contentShape(Rectangle())
         }

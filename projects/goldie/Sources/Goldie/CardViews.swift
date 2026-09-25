@@ -19,7 +19,7 @@ struct GoldieRootView: View {
                 ToastView(text: toast)
             }
             if let speech = engine.speech, !engine.expanded {
-                SpeechBubble(text: speech.text)
+                SpeechBubble(text: speech.text, chat: engine.snapshot.thread(speech.thread)?.title)
                     .onTapGesture {
                         engine.dismissSpeech()
                         withAnimation(.spring(response: 0.3)) { engine.expanded = true }
@@ -28,8 +28,8 @@ struct GoldieRootView: View {
                 PeekView(engine: engine)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                if let target = engine.nudgeTarget {
-                    FreshBowl(paused: !engine.panelVisible)
+                if let target = engine.focusThread {
+                    FreshBowl(paused: !engine.panelVisible, title: engine.snapshot.thread(target)?.title)
                         .onTapGesture { engine.copyHandoff(threadID: target) }
                         .help("Start fresh: copies a handoff prompt, then brings Cursor forward so you can paste it into a new chat")
                         .transition(.scale.combined(with: .opacity))
@@ -48,7 +48,7 @@ struct GoldieRootView: View {
         }
         .padding(10)
         .frame(width: PanelController.size.width, height: PanelController.size.height, alignment: .bottomTrailing)
-        .animation(.easeInOut(duration: 0.25), value: engine.nudgeTarget)
+        .animation(.easeInOut(duration: 0.25), value: engine.focusThread)
         .animation(.easeInOut(duration: 0.25), value: engine.speech)
         .animation(.easeInOut(duration: 0.15), value: hovering)
     }
@@ -92,13 +92,21 @@ struct ToastView: View {
 /// White bubble with a tail pointing down at Goldie. Tap = open details.
 struct SpeechBubble: View {
     let text: String
+    /// Which chat she means.
+    var chat: String? = nil
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
-            Text(text)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.black)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                if let chat {
+                    Text(chat).font(.system(size: 11, design: .rounded)).opacity(0.6).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: 240, alignment: .leading)
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white))
             BubbleTail()
                 .fill(Color.white)
@@ -191,7 +199,16 @@ struct DetailsCard: View {
                 Text(engine.verdict.reason)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                if let target = engine.nudgeTarget {
+                if let selected = engine.selectedThread, selected != engine.nudgeTarget,
+                   let chat = engine.snapshot.thread(selected) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Selected: “\(chat.title)”").font(.caption.weight(.semibold)).lineLimit(1)
+                        Button("Start fresh for this chat") { engine.copyHandoff(threadID: selected) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .tint(.orange)
+                    }
+                } else if let target = engine.nudgeTarget {
                     HStack(spacing: 10) {
                         Button("Start fresh") { engine.copyHandoff(threadID: target) }
                             .buttonStyle(.borderedProminent)
@@ -199,6 +216,7 @@ struct DetailsCard: View {
                             .tint(.orange)
                             .help("Copies a handoff prompt and brings Cursor forward. Paste it into a new chat.")
                         Button("Not now") { engine.snooze(threadID: target) }
+                            .help("Goldie won't nudge about this chat for \(Int(engine.config.snoozeMinutes)) minutes")
                             .buttonStyle(.borderless)
                             .font(.caption)
                         Button("Not helpful") { engine.notHelpful() }
@@ -236,7 +254,10 @@ struct DetailsCard: View {
         } else {
             let rows = VStack(spacing: 6) {
                 ForEach(sortedThreads) { thread in
-                    ThreadRow(thread: thread, isTarget: thread.id == engine.verdict.targetThread, engine: engine)
+                    ThreadRow(thread: thread,
+                              isTarget: thread.id == engine.nudgeTarget,
+                              isSelected: thread.id == engine.selectedThread,
+                              engine: engine)
                 }
             }
             if engine.snapshot.threads.count > 2 {
@@ -372,7 +393,10 @@ struct SetupChecklist: View {
 
 struct ThreadRow: View {
     let thread: ThreadSnapshot
+    /// Goldie's own pick for a fresh start.
     let isTarget: Bool
+    /// You clicked this row.
+    let isSelected: Bool
     @ObservedObject var engine: GoldieEngine
 
     private var severity: Int { Severity.of(thread, config: engine.config) }
@@ -384,6 +408,12 @@ struct ThreadRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(thread.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    if isTarget && !isSelected {
+                        Text("Goldie's pick")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.25)))
+                    }
                     Spacer()
                     Text(thread.running ? "running" : Fmt.idle(thread.lastActivity))
                         .font(.caption2)
@@ -397,17 +427,30 @@ struct ThreadRow: View {
                         .foregroundStyle(severity == 0 ? Color.secondary : color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 14) {
-                    Button("Copy handoff") { engine.copyHandoff(threadID: thread.id) }
-                    Button("Snooze \(Int(engine.config.snoozeMinutes))m") { engine.snooze(threadID: thread.id) }
+                if isSelected {
+                    Button("Start fresh") { engine.copyHandoff(threadID: thread.id) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(.orange)
+                } else {
+                    Button("Start fresh") { engine.copyHandoff(threadID: thread.id) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                 }
-                .buttonStyle(.borderless)
-                .font(.caption)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
-        .background(Color.primary.opacity(isTarget ? 0.09 : 0.045))
+        .background(isSelected ? Color.orange.opacity(0.14) : Color.primary.opacity(isTarget ? 0.09 : 0.045))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(isSelected ? Color.orange : Color.clear, lineWidth: 2))
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { engine.select(thread.id) } }
+        .help(rowHelp)
+    }
+
+    private var rowHelp: String {
+        isSelected ? "Selected. Click again to deselect." : "Click to select this chat"
     }
 
     /// "grok-4.7 · spent $4.10 · last msg $1.40 · ~$0.12/step"
@@ -483,6 +526,7 @@ struct Legend: View {
             item("Spent · last msg · per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. \"est.\" = estimated from tokens.")
             item("Budget bar & water level", "Month spend vs your budget. The tick shows where even spending would put you today. Goldie's water drains as you spend.")
             item("Start fresh", "Copies a handoff (goal, files, where things stand) and brings Cursor forward. Paste it into a new chat.")
+            item("Selecting a chat", "Click any chat to point the fresh bowl and Start fresh at it. Without a selection they follow Goldie's pick.")
         }
         .font(.caption)
         .padding(10)

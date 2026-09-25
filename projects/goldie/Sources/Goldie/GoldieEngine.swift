@@ -29,7 +29,11 @@ final class GoldieEngine: ObservableObject {
     @Published private(set) var toast: String?
     @Published private(set) var brainStatus = "rules"
     @Published private(set) var usageStatus = "not connected"
-    @Published var expanded = false
+    @Published var expanded = false {
+        didSet { if !expanded { selectedThread = nil } }  // selection lives only while the card is open
+    }
+    /// A chat you clicked in the card. Fresh bowl, Start fresh and Goldie's puff follow it.
+    @Published var selectedThread: String?
     /// Animations pause while the panel is hidden.
     @Published var panelVisible = true
     /// Bowl diameter in points (Small 130 / Medium 170 / Large 210), remembered across launches.
@@ -91,7 +95,7 @@ final class GoldieEngine: ObservableObject {
         s.mood = verdict.mood
         let worst = snapshot.threads.map(\.contextRatio).max() ?? 0
         s.murk = clamp01((worst - 1) / max(config.alarmedRatio - 1, 1))
-        let focus = snapshot.thread(verdict.targetThread)?.contextRatio ?? worst
+        let focus = snapshot.thread(focusThread)?.contextRatio ?? worst
         s.puff = 1 + 0.35 * clamp01((focus - 1) / max(config.alarmedRatio - 1, 1))
         s.fryCount = min(5, max(0, snapshot.parallelCount - 1))
         if let month = snapshot.monthUSD, config.monthlyBudgetUSD > 0 {
@@ -101,6 +105,16 @@ final class GoldieEngine: ObservableObject {
     }
 
     /// The thread the "fresh water" bowl offers a handoff for.
+    /// What the fresh bowl and Start fresh act on: your selection, else Goldie's pick.
+    var focusThread: String? {
+        if let s = selectedThread, snapshot.thread(s) != nil { return s }
+        return nudgeTarget
+    }
+
+    func select(_ id: String) {
+        selectedThread = selectedThread == id ? nil : id
+    }
+
     var nudgeTarget: String? {
         guard verdict.mood == .heavy || verdict.mood == .alarmed, let t = verdict.targetThread,
               !judge.isSnoozed(t, now: Date()) else { return nil }
