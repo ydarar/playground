@@ -129,4 +129,72 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(LLMBrain.stripThinking("<think>hmm</think>{\"a\":1}"), "{\"a\":1}")
         XCTAssertEqual(J.extractObject("sure! ```json\n{\"mood\":\"heavy\"}\n```")?["mood"] as? String, "heavy")
     }
+    // MARK: Costs
+
+    private func event(_ at: Date, cents: Double, model: String = "grok-4.7", tokens: Int = 100_000) -> UsageEvent {
+        UsageEvent(at: at, model: model, cents: cents, inputTokens: 0, outputTokens: 0, cacheReadTokens: tokens, cacheWriteTokens: 0)
+    }
+
+    func testParseUsageEvents() {
+        let body: [String: Any] = ["usageEventsDisplay": [
+            ["timestamp": "1800000000000", "model": "grok-4.7",
+             "tokenUsage": ["inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 1000, "totalCents": 12.5]],
+            ["timestamp": "1800000060000", "model": "auto", "usageBasedCosts": "$0.30"],
+        ]]
+        let events = CursorUsageClient.parseEvents(body)
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0].cents, 12.5)
+        XCTAssertEqual(events[0].totalTokens, 1015)
+        XCTAssertEqual(events[1].cents, 30, accuracy: 0.001)
+        XCTAssertEqual(events[0].at, Date(timeIntervalSince1970: 1_800_000_000))
+    }
+
+    func testJWTUserID() {
+        // header.payload.signature with payload {"sub":"auth0|user_abc"}
+        let payload = Data(#"{"sub":"auth0|user_abc"}"#.utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        XCTAssertEqual(CursorUsageClient.userID(fromJWT: "x.\(payload).y"), "user_abc")
+    }
+
+    func testCostAttributionByTime() {
+        var a = thread("a", ratio: 5)
+        a.activityTimes = [now.addingTimeInterval(-600), now.addingTimeInterval(-300)]
+        a.lastUserAt = now.addingTimeInterval(-320)
+        var b = thread("b", ratio: 1)
+        b.activityTimes = [now.addingTimeInterval(-60)]
+
+        var ledger = UsageLedger()
+        ledger.merge([
+            event(now.addingTimeInterval(-590), cents: 10),   // a
+            event(now.addingTimeInterval(-290), cents: 20),   // a (after last user message)
+            event(now.addingTimeInterval(-50), cents: 5),     // b
+            event(now.addingTimeInterval(-3000), cents: 99),  // nobody nearby
+        ], now: now)
+
+        let enriched = CostModel.enrich(snapshot([a, b]), ledger: ledger, config: GoldieConfig(), now: now)
+        let ea = enriched.threads[0]
+        XCTAssertEqual(ea.spentUSD ?? 0, 0.30, accuracy: 0.0001)
+        XCTAssertEqual(ea.lastMessageUSD ?? 0, 0.20, accuracy: 0.0001)
+        XCTAssertEqual(ea.nextTurnCostUSD ?? 0, 0.15, accuracy: 0.0001)
+        XCTAssertEqual(ea.costSource, "cursor")
+        XCTAssertEqual(enriched.threads[1].spentUSD ?? 0, 0.05, accuracy: 0.0001)
+    }
+
+    func testRateFallbackWhenNoEventsMatch() {
+        var a = thread("a", ratio: 4)  // 60k tokens
+        a.activityTimes = [now]
+        var ledger = UsageLedger()
+        ledger.merge([event(now.addingTimeInterval(-7200), cents: 10, tokens: 100_000)], now: now)  // 0.0001 c/token
+        let t = CostModel.enrich(snapshot([a]), ledger: ledger, config: GoldieConfig(), now: now).threads[0]
+        XCTAssertEqual(t.costSource, "cursor-rate")
+        XCTAssertEqual(t.nextTurnCostUSD ?? 0, 0.06, accuracy: 0.0001)  // 60k × 0.0001¢ = 6¢
+    }
+
+    func testNearestDistance() {
+        let times = [0.0, 100, 200].map { now.addingTimeInterval($0) }
+        XCTAssertEqual(CostModel.nearestDistance(now.addingTimeInterval(130), in: times), 30)
+        XCTAssertEqual(CostModel.nearestDistance(now.addingTimeInterval(-10), in: times), 10)
+        XCTAssertEqual(CostModel.nearestDistance(now.addingTimeInterval(500), in: times), 300)
+        XCTAssertNil(CostModel.nearestDistance(now, in: []))
+    }
 }

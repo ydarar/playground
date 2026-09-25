@@ -44,6 +44,7 @@ public final class SnapshotCollector {
         let parallelWindow = config.parallelWindowMinutes * 60
         let parallel = threads.filter { $0.running || now.timeIntervalSince($0.lastActivity) <= parallelWindow }.count
         cache = cache.filter { entry in threads.contains { $0.id == entry.key } }
+        store.retainCache(for: Set(candidates.keys))
 
         return Snapshot(threads: threads, parallelCount: parallel, takenAt: now,
                         cursorDBFound: store.exists, hookEventsSeen: hooks.hasSeenEvents)

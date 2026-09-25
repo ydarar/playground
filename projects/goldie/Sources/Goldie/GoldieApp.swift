@@ -7,8 +7,10 @@ struct GoldieApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Goldie", systemImage: "fish") {
+        MenuBarExtra {
             MenuContent(engine: appDelegate.engine, togglePanel: { appDelegate.togglePanel() })
+        } label: {
+            MenuLabel(engine: appDelegate.engine)
         }
     }
 }
@@ -27,13 +29,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func togglePanel() { panel?.toggle() }
 }
 
+/// Menu bar shows today's Cursor spend, e.g. "🐠 $3.20".
+struct MenuLabel: View {
+    @ObservedObject var engine: GoldieEngine
+    var body: some View { Text(engine.menuTitle) }
+}
+
 struct MenuContent: View {
     @ObservedObject var engine: GoldieEngine
     let togglePanel: () -> Void
 
     var body: some View {
         Text("Goldie is \(engine.verdict.mood.rawValue)")
-        Text("\(engine.snapshot.threads.count) active Cursor thread(s) · brain: \(engine.brainStatus)")
+        Text("Today \(Fmt.usd(engine.snapshot.todayUSD)) · this month \(Fmt.usd(engine.snapshot.monthUSD))")
+        Text("\(engine.snapshot.threads.count) active chat(s) · brain: \(engine.brainStatus)")
+        Text("Cursor costs: \(engine.usageStatus)")
         Divider()
         Button("Show / hide Goldie") { togglePanel() }
         Button("Install Cursor hooks") { engine.installHooks() }
@@ -50,15 +60,17 @@ final class GoldiePanel: NSPanel {
 
 @MainActor
 final class PanelController {
-    static let size = NSSize(width: 380, height: 560)
+    static let size = NSSize(width: 380, height: 860)
     let panel: GoldiePanel
     private let mover: WindowMover
+    private let engine: GoldieEngine
 
     init(engine: GoldieEngine) {
         panel = GoldiePanel(contentRect: NSRect(origin: .zero, size: Self.size),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         mover = WindowMover(panel: panel)
+        self.engine = engine
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -76,6 +88,7 @@ final class PanelController {
 
     func toggle() {
         if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+        engine.panelVisible = panel.isVisible
     }
 }
 

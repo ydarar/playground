@@ -1,6 +1,25 @@
 import GoldieCore
 import SwiftUI
 
+// MARK: - Formatting
+
+enum Fmt {
+    static func usd(_ v: Double?) -> String {
+        guard let v else { return "—" }
+        if v > 0 && v < 0.01 { return "<$0.01" }
+        return v < 100 ? String(format: "$%.2f", v) : String(format: "$%.0f", v)
+    }
+
+    static func tokens(_ n: Int) -> String {
+        n >= 1000 ? "\(n / 1000)k" : "\(n)"
+    }
+
+    static func idle(_ since: Date, now: Date = Date()) -> String {
+        let m = Int(now.timeIntervalSince(since) / 60)
+        return m < 1 ? "just now" : "idle \(m)m"
+    }
+}
+
 // MARK: - Root
 
 struct GoldieRootView: View {
@@ -26,12 +45,12 @@ struct GoldieRootView: View {
             }
             HStack(alignment: .bottom, spacing: 10) {
                 if let target = engine.nudgeTarget {
-                    FreshBowl()
+                    FreshBowl(paused: !engine.panelVisible)
                         .onTapGesture { engine.copyHandoff(threadID: target) }
-                        .help("Copy a handoff prompt and start a fresh thread")
+                        .help("Copy a handoff prompt, then paste it into a new Cursor chat")
                         .transition(.scale.combined(with: .opacity))
                 }
-                BowlView(state: engine.bowl)
+                BowlView(state: engine.bowl, paused: !engine.panelVisible)
                     .gesture(
                         DragGesture(minimumDistance: 3)
                             .onChanged { _ in mover.drag() }
@@ -40,6 +59,7 @@ struct GoldieRootView: View {
                     .onTapGesture {
                         withAnimation(.spring(response: 0.3)) { engine.expanded.toggle() }
                     }
+                    .help("Click for details · drag to move")
             }
         }
         .padding(10)
@@ -53,17 +73,24 @@ struct GoldieRootView: View {
 
 struct BowlView: View {
     let state: BowlState
+    let paused: Bool
     var size: CGFloat = 170
 
+    /// 30 fps is plenty for a pet; 8 fps while asleep; nothing while hidden.
+    private var frameInterval: Double { state.mood == .sleeping ? 1.0 / 8 : 1.0 / 30 }
+
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: frameInterval, paused: paused)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             ZStack {
-                Circle().fill(Color.white.opacity(0.10))
-                Water(level: state.waterLevel, murk: state.murk, size: size)
-                ForEach(0..<4, id: \.self) { i in bubble(i, t) }
-                ForEach(0..<state.fryCount, id: \.self) { i in fry(i, t) }
-                GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size)
+                ZStack {
+                    Circle().fill(Color.white.opacity(0.10))
+                    Water(level: state.waterLevel, murk: state.murk, size: size)
+                    ForEach(0..<4, id: \.self) { i in bubble(i, t) }
+                    ForEach(0..<state.fryCount, id: \.self) { i in fry(i, t) }
+                    GoldieFish(mood: state.mood, puff: CGFloat(state.puff), t: t, bowl: size)
+                }
+                .clipShape(Circle())
                 // glass
                 Circle().strokeBorder(
                     LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -140,7 +167,7 @@ struct GoldieFish: View {
         let m = motion()
         FishBody(eyesClosed: mood == .sleeping, worried: mood == .alarmed || mood == .stressed, t: t)
             .scaleEffect(x: m.facingRight ? 1 : -1, y: 1)
-            .scaleEffect(puff * bowl / 230)
+            .scaleEffect(puff * bowl / 310)
             .rotationEffect(.degrees(m.tilt))
             .offset(x: m.x, y: m.y)
     }
@@ -156,21 +183,21 @@ struct GoldieFish: View {
         let r = bowl
         switch mood {
         case .sleeping:  // drifting near the bottom
-            return Motion(x: CGFloat(sin(t * 0.3)) * 6, y: r * 0.2 + CGFloat(sin(t * 0.8)) * 2, facingRight: true, tilt: -6)
+            return Motion(x: CGFloat(sin(t * 0.3)) * 6, y: r * 0.22 + CGFloat(sin(t * 0.8)) * 2, facingRight: true, tilt: -6)
         case .working:  // lazy laps
             let s = t * 0.6
-            return Motion(x: CGFloat(sin(s)) * r * 0.2, y: r * 0.06 + CGFloat(sin(t * 1.3)) * 5, facingRight: cos(s) > 0, tilt: sin(t * 1.3) * 4)
+            return Motion(x: CGFloat(sin(s)) * r * 0.18, y: r * 0.08 + CGFloat(sin(t * 1.3)) * 5, facingRight: cos(s) > 0, tilt: sin(t * 1.3) * 4)
         case .heavy:  // bloated and slow
             let s = t * 0.28
-            return Motion(x: CGFloat(sin(s)) * r * 0.1, y: r * 0.12 + CGFloat(sin(t * 0.7)) * 3, facingRight: cos(s) > 0, tilt: 8)
+            return Motion(x: CGFloat(sin(s)) * r * 0.1, y: r * 0.14 + CGFloat(sin(t * 0.7)) * 3, facingRight: cos(s) > 0, tilt: 8)
         case .alarmed:  // tight frantic circles
             let s = t * 3.2
-            return Motion(x: CGFloat(cos(s)) * r * 0.18, y: r * 0.06 + CGFloat(sin(s)) * r * 0.1, facingRight: -sin(s) > 0, tilt: 0)
+            return Motion(x: CGFloat(cos(s)) * r * 0.16, y: r * 0.1 + CGFloat(sin(s)) * r * 0.08, facingRight: -sin(s) > 0, tilt: 0)
         case .stressed:  // pressed against the glass
-            return Motion(x: r * 0.2 + CGFloat(sin(t * 6)) * 2, y: r * 0.22, facingRight: true, tilt: -10)
+            return Motion(x: r * 0.18 + CGFloat(sin(t * 6)) * 2, y: r * 0.22, facingRight: true, tilt: -10)
         case .celebrating:  // flips
             let j = abs(sin(t * 4))
-            return Motion(x: CGFloat(sin(t * 1.2)) * r * 0.1, y: r * 0.05 - CGFloat(j) * r * 0.25, facingRight: cos(t * 1.2) > 0, tilt: sin(t * 4) * 25)
+            return Motion(x: CGFloat(sin(t * 1.2)) * r * 0.1, y: r * 0.08 - CGFloat(j) * r * 0.2, facingRight: cos(t * 1.2) > 0, tilt: sin(t * 4) * 25)
         }
     }
 }
@@ -253,8 +280,10 @@ struct TailShape: Shape {
 
 /// The silent nudge: an empty bowl of clean water. Click = copy handoff.
 struct FreshBowl: View {
+    let paused: Bool
+
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: paused)) { timeline in
             let pulse = 1 + 0.04 * CGFloat(sin(timeline.date.timeIntervalSinceReferenceDate * 3))
             VStack(spacing: 4) {
                 ZStack {
@@ -296,41 +325,72 @@ struct SpeechBubble: View {
 
 struct DetailsCard: View {
     @ObservedObject var engine: GoldieEngine
+    @State private var showLegend = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Goldie").font(.system(.headline, design: .rounded))
-                Text(engine.verdict.mood.rawValue)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Capsule().fill(moodColor.opacity(0.25)))
-                Spacer()
-                Text("brain: \(engine.brainStatus)").font(.caption2).foregroundStyle(.secondary)
-            }
-            Text(engine.verdict.reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            spendTiles
+            Text(engine.verdict.reason)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
             if let hint = engine.emptyHint {
                 Text(hint).font(.caption).foregroundStyle(.secondary)
             }
-            if !engine.snapshot.threads.isEmpty {
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(engine.snapshot.threads) { thread in
-                            ThreadRow(thread: thread, isTarget: thread.id == engine.verdict.targetThread, engine: engine)
-                        }
-                    }
-                }
-                .frame(maxHeight: 230)
-            }
-            if engine.verdict.targetThread != nil || engine.verdict.mood == .alarmed {
-                Button("Not helpful") { engine.notHelpful() }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
-            }
+            threadList
+            footer
+            if showLegend { Legend() }
         }
         .padding(14)
         .frame(width: 350, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Goldie").font(.system(.headline, design: .rounded))
+            Text(engine.verdict.mood.rawValue)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Capsule().fill(moodColor.opacity(0.25)))
+            Spacer()
+            Text(engine.brainStatus == "local LLM" ? "🧠 local AI" : "🧠 \(engine.brainStatus)")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private var spendTiles: some View {
+        HStack(spacing: 8) {
+            Tile(label: "Today", value: Fmt.usd(engine.snapshot.todayUSD))
+            Tile(label: "This month", value: Fmt.usd(engine.snapshot.monthUSD))
+            Tile(label: "Chats active", value: "\(engine.snapshot.threads.count)")
+        }
+        .help(engine.snapshot.monthUSD == nil ? "Cursor costs: \(engine.usageStatus)" : "From your Cursor usage")
+    }
+
+    @ViewBuilder private var threadList: some View {
+        let rows = VStack(spacing: 6) {
+            ForEach(engine.snapshot.threads) { thread in
+                ThreadRow(thread: thread, isTarget: thread.id == engine.verdict.targetThread, engine: engine)
+            }
+        }
+        if engine.snapshot.threads.count > 2 {
+            ScrollView { rows }.frame(height: 260)
+        } else {
+            rows
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            if engine.verdict.targetThread != nil || engine.verdict.mood == .alarmed {
+                Button("Not helpful") { engine.notHelpful() }
+            }
+            Spacer()
+            Button(showLegend ? "Hide explanations" : "What do these mean?") { showLegend.toggle() }
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
     }
 
     private var moodColor: Color {
@@ -344,25 +404,55 @@ struct DetailsCard: View {
     }
 }
 
+struct Tile: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.system(.body, design: .rounded).weight(.semibold)).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+}
+
 struct ThreadRow: View {
     let thread: ThreadSnapshot
     let isTarget: Bool
     @ObservedObject var engine: GoldieEngine
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(dotColor).frame(width: 8, height: 8)
                 Text(thread.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
-                if thread.running { Text("running").font(.caption2).foregroundStyle(.secondary) }
+                Text(thread.running ? "running" : Fmt.idle(thread.lastActivity))
+                    .font(.caption2).foregroundStyle(.secondary)
             }
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Text(contextLine).font(.caption).foregroundStyle(.secondary)
+            if let money = moneyLine {
+                Text(money).font(.caption.weight(.medium))
+            }
+            if let advice = adviceLine {
+                Text(advice).font(.caption).foregroundStyle(dotColor == .green ? Color.secondary : dotColor)
+            }
             HStack(spacing: 12) {
-                Button("Copy handoff") { engine.copyHandoff(threadID: thread.id) }
+                if isTarget {
+                    Button("Start fresh (copy handoff)") { engine.copyHandoff(threadID: thread.id) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(.orange)
+                } else {
+                    Button("Copy handoff") { engine.copyHandoff(threadID: thread.id) }
+                        .buttonStyle(.borderless)
+                }
                 Button("Snooze") { engine.snooze(threadID: thread.id) }
+                    .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
             .font(.caption)
         }
         .padding(8)
@@ -370,22 +460,67 @@ struct ThreadRow: View {
             .fill(isTarget ? Color.orange.opacity(0.18) : Color.primary.opacity(0.05)))
     }
 
-    private var detail: String {
+    /// "grok-4.7 · re-reads 256k tokens every step"
+    private var contextLine: String {
         let approx = thread.contextSource == "estimated" ? "~" : ""
-        var parts = [
-            thread.model ?? "model ?",
-            "\(approx)\(thread.contextTokens / 1000)k ctx",
-            String(format: "%.1f× fresh", thread.contextRatio),
-            "loop \(Int(thread.loopScore * 100))%",
-        ]
-        if thread.maxMode { parts.append("MAX") }
-        if let cost = thread.nextTurnCostUSD { parts.append(String(format: "$%.3f/turn", cost)) }
-        return parts.joined(separator: " · ")
+        var s = "\(thread.model ?? "unknown model") · re-reads \(approx)\(Fmt.tokens(thread.contextTokens)) tokens every step"
+        if thread.maxMode { s += " · Max Mode" }
+        return s
+    }
+
+    /// "spent $4.10 · last message $1.40 · ~$0.12/step"
+    private var moneyLine: String? {
+        var parts: [String] = []
+        if let spent = thread.spentUSD { parts.append("spent \(Fmt.usd(spent))") }
+        if let last = thread.lastMessageUSD, last > 0 { parts.append("last message \(Fmt.usd(last))") }
+        if let step = thread.nextTurnCostUSD {
+            parts.append("~\(Fmt.usd(step))/step" + (thread.costSource == "cursor" ? "" : " (est.)"))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The one thing worth knowing, in plain words.
+    private var adviceLine: String? {
+        if thread.maxRepeatCommand >= 3, let cmd = thread.topRepeatedCommand {
+            return "⚠︎ ran `\(cmd.prefix(40))` \(thread.maxRepeatCommand)× in a row. Probably stuck."
+        }
+        if thread.maxRepeatFileEdit >= 4, let file = thread.topRepeatedFile {
+            return "⚠︎ edited \((file as NSString).lastPathComponent) \(thread.maxRepeatFileEdit)×. Probably going in circles."
+        }
+        if thread.toolCallsSinceUser >= 15 {
+            return "⚠︎ \(thread.toolCallsSinceUser) steps since your last message"
+        }
+        if thread.contextRatio >= 2 {
+            return "A new chat would be ~\(Int(thread.contextRatio.rounded()))× cheaper per step"
+        }
+        return nil
     }
 
     private var dotColor: Color {
         if thread.loopScore >= 0.75 || thread.contextRatio >= engine.config.alarmedRatio { return .red }
         if thread.loopScore >= 0.5 || thread.contextRatio >= engine.config.heavyRatio { return .orange }
         return .green
+    }
+}
+
+struct Legend: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            item("Step", "One call to the model. A single message can trigger many steps: read a file, run a command, edit, and so on.")
+            item("Re-reads N tokens every step", "The agent re-sends the whole chat on every step, so a long chat pays for its entire history again and again.")
+            item("A new chat would be ~N× cheaper", "Compared with a fresh chat that starts from a short handoff (~15k tokens).")
+            item("Spent / last message / per step", "Real charges from your Cursor usage, matched to each chat by time. Close, not exact. \"est.\" = estimated from tokens.")
+            item("Start fresh", "Copies a handoff prompt (goal, files, where things stand). Paste it into a new chat.")
+        }
+        .font(.caption)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
+    }
+
+    private func item(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).fontWeight(.semibold)
+            Text(body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

@@ -11,6 +11,8 @@ public struct HookThreadState: Equatable {
     public var runToolEvents: Int = 0
     public var runCommands: [String: Int] = [:]
     public var runFiles: [String: Int] = [:]
+    /// Timestamps of recent agent activity; used to match Cursor usage events (and their $) to this thread.
+    public var recentEventTimes: [Date] = []
 
     public init(lastEventAt: Date) { self.lastEventAt = lastEventAt }
 }
@@ -74,6 +76,8 @@ public final class HookTracker {
         let event = (o["event"] as? String) ?? ""
         var s = threads[id] ?? HookThreadState(lastEventAt: ts)
         s.lastEventAt = max(s.lastEventAt, ts)
+        s.recentEventTimes.append(ts)
+        if s.recentEventTimes.count > 400 { s.recentEventTimes.removeFirst(s.recentEventTimes.count - 400) }
         if let m = o["model"] as? String, !m.isEmpty { s.model = m }
         if let w = o["workspace"] as? String { s.workspace = w }
 

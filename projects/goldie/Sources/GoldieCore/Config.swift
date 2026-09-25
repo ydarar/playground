@@ -26,6 +26,13 @@ public struct GoldieConfig: Codable, Equatable {
 
     public var llm: LLMConfig = LLMConfig()
 
+    /// Read your Cursor usage (per-request $) with your existing Cursor login. Read-only; the
+    /// login token is only ever sent to cursor.com, exactly like the Cursor app does.
+    public var cursorUsageAPI: Bool = true
+    public var usageRefreshMinutes: Double = 2
+    /// A usage event is matched to the chat with agent activity closest in time, within this window.
+    public var attributionToleranceSeconds: Double = 120
+
     /// Optional USD per 1M *input* tokens, keyed by a lowercase substring of the model name
     /// (e.g. "grok": <your price>). Key "default" applies to anything unmatched. Empty = no $ shown.
     public var inputPricePerMTok: [String: Double] = [:]

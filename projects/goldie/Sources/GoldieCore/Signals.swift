@@ -14,6 +14,8 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     public var contextSource: String
     /// contextTokens / freshBaselineTokens: how many fresh starts one more turn costs.
     public var contextRatio: Double
+    /// Cost of one agent step (one model call). Every step re-sends the whole context.
+    /// From Cursor's usage data when available, else from a configured price.
     public var nextTurnCostUSD: Double?
     public var toolCallsSinceUser: Int
     public var maxRepeatCommand: Int
@@ -22,6 +24,19 @@ public struct ThreadSnapshot: Codable, Equatable, Identifiable {
     public var loopScore: Double
     public var running: Bool
     public var lastActivity: Date
+
+    // Filled in by CostModel from Cursor usage events (nil when unavailable).
+    public var spentUSD: Double? = nil
+    /// Everything your latest message triggered (all its steps).
+    public var lastMessageUSD: Double? = nil
+    /// "cursor" (matched usage events) | "cursor-rate" (tokens × your observed rate) | "config" | "none"
+    public var costSource: String = "none"
+
+    public var lastUserAt: Date? = nil
+    public var topRepeatedCommand: String? = nil
+    public var topRepeatedFile: String? = nil
+    /// Recent agent activity timestamps, used to match usage events to this thread. Not sent to the brain.
+    public var activityTimes: [Date] = []
 }
 
 public struct Snapshot: Codable, Equatable {
@@ -31,6 +46,8 @@ public struct Snapshot: Codable, Equatable {
     public var takenAt: Date
     public var cursorDBFound: Bool
     public var hookEventsSeen: Bool
+    public var todayUSD: Double? = nil
+    public var monthUSD: Double? = nil
 
     public static let empty = Snapshot(threads: [], parallelCount: 0, takenAt: .distantPast, cursorDBFound: false, hookEventsSeen: false)
 
@@ -64,8 +81,10 @@ public enum Signals {
             for (k, v) in h.runCommands { commands[k] = max(commands[k] ?? 0, v) }
             for (k, v) in h.runFiles { files[k] = max(files[k] ?? 0, v) }
         }
-        let maxCommand = commands.values.max() ?? 0
-        let maxFile = files.values.max() ?? 0
+        let topCommand = commands.max { $0.value < $1.value }
+        let topFile = files.max { $0.value < $1.value }
+        let maxCommand = topCommand?.value ?? 0
+        let maxFile = topFile?.value ?? 0
 
         let (context, source) = contextEstimate(thread, config: config)
         let ratio = context > 0 ? Double(context) / Double(max(config.freshBaselineTokens, 1)) : 0
@@ -75,7 +94,9 @@ public enum Signals {
             .compactMap { $0 }.max() ?? .distantPast
 
         let title = thread?.title.isEmpty == false ? thread!.title : "Cursor thread \(id.prefix(6))"
-        return ThreadSnapshot(
+        let bubbleTimes = bubbles.filter { !$0.isUser }.compactMap(\.createdAt)
+        let activity = Array((bubbleTimes + (hook?.recentEventTimes ?? [])).sorted().suffix(400))
+        var snap = ThreadSnapshot(
             id: id,
             title: title,
             model: model,
@@ -93,6 +114,12 @@ public enum Signals {
             running: running,
             lastActivity: lastActivity
         )
+        snap.lastUserAt = bubbles.last(where: { $0.isUser })?.createdAt
+        snap.topRepeatedCommand = maxCommand >= 2 ? topCommand?.key : nil
+        snap.topRepeatedFile = maxFile >= 2 ? topFile?.key : nil
+        snap.activityTimes = activity
+        if snap.nextTurnCostUSD != nil { snap.costSource = "config" }
+        return snap
     }
 
     static func contextEstimate(_ thread: CursorThread?, config: GoldieConfig) -> (Int, String) {

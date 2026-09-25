@@ -28,7 +28,10 @@ final class GoldieEngine: ObservableObject {
     @Published private(set) var speech: Speech?
     @Published private(set) var toast: String?
     @Published private(set) var brainStatus = "rules"
+    @Published private(set) var usageStatus = "not connected"
     @Published var expanded = false
+    /// Animations pause while the panel is hidden.
+    @Published var panelVisible = true
 
     let config: GoldieConfig
     private let collector: SnapshotCollector
@@ -43,12 +46,21 @@ final class GoldieEngine: ObservableObject {
     private var lastFingerprint = ""
     private var llmVerdict: (verdict: Verdict, fingerprint: String, at: Date)?
 
+    /// Collector output before costs are attached.
+    private var rawSnapshot = Snapshot.empty
+    private var ledger = UsageLedger()
+    private let usageClient: CursorUsageClient?
+    private var usageInFlight = false
+    private var lastUsageAt = Date.distantPast
+
     init() {
         config = GoldieConfig.load()
         collector = SnapshotCollector(config: config)
         judge = Judge(config: config)
         llm = config.llm.enabled ? LLMBrain(config: config.llm) : nil
         brainStatus = llm == nil ? "rules (LLM off)" : "rules (waiting for LLM)"
+        usageClient = config.cursorUsageAPI ? CursorUsageClient() : nil
+        usageStatus = usageClient == nil ? "off in config" : "connecting…"
     }
 
     func start() {
@@ -78,6 +90,12 @@ final class GoldieEngine: ObservableObject {
         return t
     }
 
+    /// Menu bar text: today's spend once known.
+    var menuTitle: String {
+        guard let today = snapshot.todayUSD else { return "🐠" }
+        return "🐠 " + Fmt.usd(today)
+    }
+
     var emptyHint: String? {
         if !snapshot.cursorDBFound { return "Cursor's state DB wasn't found. Is Cursor installed?" }
         if !snapshot.hookEventsSeen { return "No hook events yet. Menu bar → Install Cursor hooks, then restart Cursor." }
@@ -93,10 +111,35 @@ final class GoldieEngine: ObservableObject {
             let snap = collector.collect()
             Task { @MainActor [weak self] in self?.apply(snap) }
         }
+        refreshUsageIfDue()
     }
 
-    private func apply(_ snap: Snapshot) {
+    /// Pulls new Cursor usage events (real $) every few minutes; incremental after the first fetch.
+    private func refreshUsageIfDue() {
         let now = Date()
+        guard let client = usageClient, !usageInFlight,
+              now.timeIntervalSince(lastUsageAt) >= config.usageRefreshMinutes * 60 else { return }
+        usageInFlight = true
+        lastUsageAt = now
+        let from = ledger.fetchStart(now: now)
+        Task { @MainActor [weak self] in
+            do {
+                let events = try await client.fetchAll(since: from, until: Date())
+                guard let self else { return }
+                self.ledger.merge(events, now: Date())
+                self.usageStatus = "connected"
+                self.apply(self.rawSnapshot)
+            } catch {
+                self?.usageStatus = "unavailable: \(error)"
+            }
+            self?.usageInFlight = false
+        }
+    }
+
+    private func apply(_ raw: Snapshot) {
+        let now = Date()
+        rawSnapshot = raw
+        let snap = CostModel.enrich(raw, ledger: ledger, config: config, now: now)
         snapshot = snap
         judge.observe(snap, now: now)
         let heuristic = judge.heuristic(snap, now: now)
@@ -136,7 +179,7 @@ final class GoldieEngine: ObservableObject {
                 self.llmHealthy = true
                 self.brainStatus = "local LLM"
                 self.llmVerdict = (verdict: result, fingerprint: fingerprint, at: Date())
-                self.apply(self.snapshot)
+                self.apply(self.rawSnapshot)
             } else {
                 self.llmHealthy = false
                 self.brainStatus = "rules (LLM unreachable)"
@@ -174,7 +217,7 @@ final class GoldieEngine: ObservableObject {
         judge.snooze(thread: threadID, now: Date())
         if speech?.thread == threadID { speech = nil }
         showToast("snoozed for \(Int(config.snoozeMinutes)) min")
-        apply(snapshot)
+        apply(rawSnapshot)
     }
 
     func notHelpful() {
@@ -182,7 +225,7 @@ final class GoldieEngine: ObservableObject {
         judge.notHelpful(thread: key, now: Date())
         speech = nil
         showToast("noted. i'll back off")
-        apply(snapshot)
+        apply(rawSnapshot)
     }
 
     func installHooks() {

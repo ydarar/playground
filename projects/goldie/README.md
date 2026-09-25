@@ -4,7 +4,7 @@ A small goldfish that floats on your Mac desktop and tells you when a Cursor age
 
 **Why:** every agent turn re-sends the whole thread, so per-turn cost grows with context. A fresh thread plus a short handoff is often far cheaper than one more turn in a bloated thread. See [PRD.md](PRD.md).
 
-> **Status: POC.** Cursor only. No spend meters yet. Apple Silicon, macOS 14+ (built for 26).
+> **Status: POC.** Cursor only. Apple Silicon, macOS 14+ (built for 26).
 
 ## How it works
 
@@ -20,13 +20,17 @@ Cursor state.vscdb (read-only) ────────────────�
 - **Hooks** (real-time). Cursor runs `goldiectl hook <event>` after agent replies, shell commands, file edits and MCP calls, and on `stop`. The hooks only observe; they can never block anything. They store metadata only: event, conversation id, model, command (truncated), file path.
 - **Cursor's local DB** (`state.vscdb`, opened read-only). Holds each thread's messages. Used for context size and loop detection.
 
+**Costs (real $).** Goldie reads your Cursor usage (per-request charges) with the Cursor app's own login token from its local DB. It is read-only, and the token is only ever sent to cursor.com, just like the Cursor app. Each charge is matched to the chat with agent activity closest in time. That gives each chat three numbers: **spent**, **last message** (all the steps one message triggered), and **per step**. The menu bar shows today's total. Turn it off with `"cursorUsageAPI": false`.
+
+**Steps vs messages.** One message can trigger many *steps* (model calls: read a file, run a command, edit…), and **every step re-sends the whole chat**. That's why long chats get expensive fast.
+
 **Signals per thread:**
 
 | Signal | Meaning |
 |---|---|
 | context tokens | Reported by Cursor if available; else the last request's input tokens; else estimated from text (~4 bytes/token + system overhead). Estimated values show a `~`. |
-| context ratio | `context / freshBaselineTokens` (default 15k). "One more turn costs ≈ N fresh starts." |
-| loop score | Tool calls since you last spoke, plus the same command or file edit repeated |
+| "a new chat would be ~N× cheaper" | `context / freshBaselineTokens` (default 15k, a fresh chat plus a handoff) |
+| stuck / going in circles | Many steps since your last message, or the same command or file edit repeated |
 | parallel | Threads active in the last 3 min (the small fry fish in the bowl) |
 
 **Brain.** A small local model judges the numeric snapshot and decides mood, whether to speak, and what to say. It never sees transcripts. If the model isn't running, built-in rules take over. The **Judge** enforces the fixed rules either way:
@@ -56,6 +60,7 @@ swift test                                    # core logic tests
 
 # 1. Check that Goldie can read your Cursor data (structure only, no message text):
 .build/release/goldiectl probe                # ← paste this output back to Claude
+.build/release/goldiectl usage                # ← checks the Cursor cost connection; paste this too
 
 # 2. Install the observe-only Cursor hooks (keeps any hooks you already have; backs up hooks.json):
 .build/release/goldiectl install-cursor-hooks # then restart Cursor
@@ -96,7 +101,9 @@ Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
 - **Cursor's DB schema is undocumented** and changes between versions. `goldiectl probe` shows which fields exist. The context estimate falls back to text length when token fields are missing.
 - **Hook payload fields** (conversation id, model) are inferred from Cursor's hooks docs. The probe prints the actual payload keys it received.
 - `rowid` ordering is used as a fast "recently updated" index. The probe compares it against `lastUpdatedAt`.
-- Water level (monthly budget) is always full until the spend meters land.
+- The Cursor usage endpoint (`/api/dashboard/get-filtered-usage-events`) is what cursor.com's dashboard uses. It's undocumented. `goldiectl usage` shows whether it works for your account.
+- Per-chat $ is matched by time, so two chats running at the same second can swap a few cents.
+- Water level (monthly budget) is always full for now.
 
 ## Layout
 

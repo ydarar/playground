@@ -44,7 +44,7 @@ public enum HeuristicBrain {
         if snap.parallelCount >= config.parallelAlarm {
             return Verdict(mood: .alarmed, speak: true, targetThread: nil,
                            message: "\(snap.parallelCount) fish burning at once",
-                           reason: "\(snap.parallelCount) agent threads active in the last few minutes, all paying for their context at the same time.",
+                           reason: "\(snap.parallelCount) chats are running at once, and each one pays to re-read its own history every step.",
                            source: "rules")
         }
 
@@ -70,23 +70,26 @@ public enum HeuristicBrain {
     static func assess(_ t: ThreadSnapshot, config: GoldieConfig) -> (mood: Mood, message: String?, reason: String) {
         let name = "“\(t.title.clipped(40))”"
         let k = t.contextTokens / 1000
-        let ratio = String(format: "%.1f", t.contextRatio)
+        let perStep = t.nextTurnCostUSD.map { String(format: " (~$%.2f per step)", $0) } ?? ""
+        let cheaper = max(1, Int(t.contextRatio.rounded()))
         let mode = t.maxMode ? " in Max Mode" : ""
 
         if t.loopScore >= 0.75 {
-            var why = "\(t.toolCallsSinceUser) tool calls since you last spoke"
-            if t.maxRepeatCommand >= 3 { why += ", same command \(t.maxRepeatCommand)×" }
-            if t.maxRepeatFileEdit >= 4 { why += ", same file edited \(t.maxRepeatFileEdit)×" }
-            return (.alarmed, "going in circles. fresh water?", "\(name) \(why), and every lap re-reads \(k)k tokens.")
+            var why = "\(t.toolCallsSinceUser) steps since your last message"
+            if t.maxRepeatCommand >= 3 { why = "ran the same command \(t.maxRepeatCommand)× in a row" }
+            else if t.maxRepeatFileEdit >= 4 { why = "edited the same file \(t.maxRepeatFileEdit)×" }
+            return (.alarmed, "going in circles. fresh water?",
+                    "\(name) looks stuck: \(why), and every step re-reads \(k)k tokens\(perStep).")
         }
         if t.contextRatio >= config.alarmedRatio {
             return (.alarmed, "this bowl's murky. fresh water?",
-                    "\(name) re-sends \(k)k tokens every turn\(mode), \(ratio)× a fresh start.")
+                    "\(name) re-reads \(k)k tokens every step\(mode)\(perStep). A new chat would be ~\(cheaper)× cheaper per step.")
         }
         if t.contextRatio >= config.heavyRatio || t.loopScore >= 0.5 || (t.maxMode && t.contextRatio >= config.heavyRatio * 0.75) {
-            return (.heavy, "fresh water?", "\(name) is getting heavy: \(k)k tokens per turn\(mode), \(ratio)× a fresh start.")
+            return (.heavy, "fresh water?",
+                    "\(name) is getting long: \(k)k tokens every step\(mode)\(perStep). A new chat would be ~\(cheaper)× cheaper.")
         }
-        return (.working, nil, "\(name) looks healthy (\(k)k tokens per turn).")
+        return (.working, nil, "\(name) is fine: \(k)k tokens per step\(perStep).")
     }
 }
 

@@ -20,10 +20,13 @@ public final class LLMBrain {
     context size, and a thread's total cost grows roughly with the square of its length. Starting a fresh \
     thread with a short handoff is often far cheaper than one more turn in a bloated thread.
 
+    One user message can trigger many agent "steps" (model calls), and every step re-reads the whole chat.
+
     You get a JSON snapshot of live Cursor agent threads:
-    - context_ratio: context / size of a fresh start (e.g. 6 means one more turn costs ~6 fresh starts)
-    - loop signals: tool_calls_since_user, max_repeat_command, max_repeat_file_edit, loop_score (0-1)
-    - running, minutes_idle, model, max_mode, parallel_threads
+    - context_tokens: tokens re-read on every step; context_ratio: how many times cheaper a step would be in a new chat
+    - cost_per_step_usd, last_message_usd, spent_usd: real dollars from Cursor usage when present
+    - loop signals: steps_since_user_message, max_repeat_command, max_repeat_file_edit, loop_score (0-1)
+    - running, minutes_idle, model, max_mode, parallel_threads, today_usd, month_usd (budget: $800/month)
     plus a rules-based suggestion and recent nudges with the user's feedback.
 
     Decide Goldie's mood and whether it should speak. Guidance:
@@ -36,7 +39,8 @@ public final class LLMBrain {
     Reply with ONLY a JSON object:
     {"mood": "sleeping|working|heavy|alarmed|stressed|celebrating", "speak": true|false, \
     "target_thread": "<thread id like t1>" or null, "message": "<max 8 lowercase words>" or null, \
-    "reason": "<one short sentence with the key numbers>"}
+    "reason": "<one short plain-English sentence for a non-expert, with $ amounts when known; \
+    never say 'context_ratio' or 'loop_score'>"}
     """
 
     public func judge(_ ctx: JudgeContext) async -> Verdict? {
@@ -73,7 +77,7 @@ public final class LLMBrain {
                 "context_source": t.contextSource,
                 "context_ratio": (t.contextRatio * 10).rounded() / 10,
                 "user_turns": t.userTurns,
-                "tool_calls_since_user": t.toolCallsSinceUser,
+                "steps_since_user_message": t.toolCallsSinceUser,
                 "max_repeat_command": t.maxRepeatCommand,
                 "max_repeat_file_edit": t.maxRepeatFileEdit,
                 "loop_score": (t.loopScore * 100).rounded() / 100,
@@ -81,7 +85,9 @@ public final class LLMBrain {
                 "minutes_idle": Int(ctx.now.timeIntervalSince(t.lastActivity) / 60),
                 "snoozed": ctx.snoozed.contains(t.id),
             ]
-            if let cost = t.nextTurnCostUSD { d["next_turn_usd"] = (cost * 1000).rounded() / 1000 }
+            if let cost = t.nextTurnCostUSD { d["cost_per_step_usd"] = (cost * 1000).rounded() / 1000 }
+            if let spent = t.spentUSD { d["spent_usd"] = (spent * 100).rounded() / 100 }
+            if let last = t.lastMessageUSD { d["last_message_usd"] = (last * 100).rounded() / 100 }
             threads.append(d)
         }
         let nudges: [[String: Any]] = ctx.nudges.map { n in
@@ -98,12 +104,14 @@ public final class LLMBrain {
         } else {
             rules["target_thread"] = NSNull()
         }
-        let root: [String: Any] = [
+        var root: [String: Any] = [
             "threads": threads,
             "parallel_threads": ctx.snapshot.parallelCount,
             "rules_suggestion": rules,
             "recent_nudges": nudges,
         ]
+        if let today = ctx.snapshot.todayUSD { root["today_usd"] = (today * 100).rounded() / 100 }
+        if let month = ctx.snapshot.monthUSD { root["month_usd"] = (month * 100).rounded() / 100 }
         let data = (try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])) ?? Data()
         return (String(data: data, encoding: .utf8) ?? "{}", idMap)
     }

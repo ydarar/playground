@@ -5,6 +5,7 @@ let usage = """
 goldiectl: Goldie's command-line helper
 
   goldiectl probe                   Print the structure of your Cursor data (no message text). Paste it back to Claude.
+  goldiectl usage                   Check that Goldie can read your Cursor costs (no secrets printed).
   goldiectl snapshot                Print what Goldie currently sees, as JSON.
   goldiectl install-cursor-hooks    Add Goldie's observe-only hooks to ~/.cursor/hooks.json (keeps yours).
   goldiectl uninstall-cursor-hooks  Remove them.
@@ -31,6 +32,9 @@ case "uninstall-cursor-hooks":
 
 case "probe":
     print(CursorProbe.report())
+
+case "usage":
+    print(await UsageDiagnostics.report())
 
 case "snapshot":
     let snap = SnapshotCollector(config: GoldieConfig.load()).collect()

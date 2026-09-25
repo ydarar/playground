@@ -39,8 +39,46 @@ public final class CursorStore {
     public let path: String
     private var db: SQLiteReader?
 
+    /// Parsed bubbles per composer, keyed by bubble id, with the row length they were parsed at.
+    /// Long threads have thousands of bubbles; only new or changed rows are re-read and re-parsed.
+    private var bubbleCache: [String: [String: (length: Int, bubble: CursorBubble)]] = [:]
+
     public init(path: String = Paths.cursorStateDB.path) {
         self.path = path
+    }
+
+    /// Drop cached bubbles for threads that are no longer being watched.
+    public func retainCache(for ids: Set<String>) {
+        bubbleCache = bubbleCache.filter { ids.contains($0.key) }
+    }
+
+    private func loadBubbles(db: SQLiteReader, composerID id: String) -> [String: CursorBubble] {
+        let prefix = "bubbleId:\(id):"
+        let lengths = db.strings("SELECT key, length(value) FROM cursorDiskKV WHERE key >= ? AND key < ?", [prefix, "bubbleId:\(id);"])
+        var cache = bubbleCache[id] ?? [:]
+        var current: [String: Int] = [:]
+        var stale: [String] = []
+        for row in lengths {
+            guard row.count == 2, let key = row[0], let length = row[1].flatMap({ Int($0) }) else { continue }
+            let bid = String(key.dropFirst(prefix.count))
+            current[bid] = length
+            if cache[bid]?.length != length { stale.append(bid) }
+        }
+        var start = 0
+        while start < stale.count {
+            let chunk = Array(stale[start..<min(start + 200, stale.count)])
+            start += 200
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let rows = db.rows("SELECT key, value FROM cursorDiskKV WHERE key IN (\(placeholders))", chunk.map { prefix + $0 })
+            for row in rows {
+                guard row.count == 2, let key = J.string(row[0]), let raw = row[1].flatMap({ J.obj($0) }) else { continue }
+                let bid = String(key.dropFirst(prefix.count))
+                cache[bid] = (length: current[bid] ?? 0, bubble: CursorStore.parseBubble(raw))
+            }
+        }
+        cache = cache.filter { current[$0.key] != nil }
+        bubbleCache[id] = cache
+        return cache.mapValues { $0.bubble }
     }
 
     public var exists: Bool { FileManager.default.fileExists(atPath: path) }
@@ -90,23 +128,15 @@ public final class CursorStore {
         if let inline = composer["conversation"] as? [[String: Any]], !inline.isEmpty {
             bubbles = inline.map(CursorStore.parseBubble)
         } else {
-            let prefix = "bubbleId:\(id):"
-            let rows = db.rows("SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?", [prefix, "bubbleId:\(id);"])
-            var byID: [String: [String: Any]] = [:]
-            for row in rows {
-                guard row.count == 2,
-                      let key = J.string(row[0]),
-                      let value = row[1].flatMap({ J.obj($0) }) else { continue }
-                byID[String(key.dropFirst(prefix.count))] = value
-            }
+            let byID = loadBubbles(db: db, composerID: id)
             let headers = composer["fullConversationHeadersOnly"] as? [[String: Any]] ?? []
             if headers.isEmpty {
-                bubbles = byID.values.map(CursorStore.parseBubble)
+                bubbles = byID.values
                     .sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
             } else {
-                bubbles = headers.compactMap { header in
-                    guard let bid = header["bubbleId"] as? String, let raw = byID[bid] else { return nil }
-                    return CursorStore.parseBubble(raw)
+                bubbles = headers.compactMap { header -> CursorBubble? in
+                    guard let bid = header["bubbleId"] as? String else { return nil }
+                    return byID[bid]
                 }
             }
         }
