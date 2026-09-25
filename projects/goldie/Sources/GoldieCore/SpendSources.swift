@@ -43,7 +43,7 @@ public struct SourcesConfig: Codable, Equatable {
 public enum ClaudeGateway {
     public static let keychainService = "goldie-llmg"
 
-    public enum KeyLookup: Equatable {
+    public enum KeyLookup: Equatable, Sendable {
         case found(String)
         case missing
         /// The Keychain item exists but Goldie wasn't allowed to read it.
@@ -73,7 +73,7 @@ public enum ClaudeGateway {
         }
     }
 
-    public struct Spend: Equatable {
+    public struct Spend: Equatable, Sendable {
         public var usd: Double
         /// True when the key has a budget period (e.g. monthly), so `usd` resets each period.
         /// False means LiteLLM reports the key's lifetime spend.

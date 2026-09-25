@@ -200,7 +200,7 @@ final class GoldieEngine: ObservableObject {
                 self.claudeStatus = "not connected (no gateway key: \(ClaudeGateway.keyHelp))"
                 return  // not cached: picked up once you add it
             case .denied:
-                self.claudeKey = .denied
+                // Not cached: retried next refresh, so allowing access in Keychain works without a restart.
                 self.claudeStatus = "Keychain access to the gateway key was denied (allow it, or \(ClaudeGateway.keyHelp))"
                 return
             case .found(let key):
@@ -210,11 +210,13 @@ final class GoldieEngine: ObservableObject {
                     if spend.isPeriod {
                         self.claudeMonthUSD = spend.usd
                         self.claudeStatus = "connected (gateway budget period" + (spend.resetsAt.map { ", resets \($0)" } ?? "") + ")"
+                        if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
                     } else {
                         let mtd = ClaudeGateway.monthToDate(lifetime: spend.usd, now: Date())
                         self.claudeMonthUSD = mtd.usd
                         let since = mtd.since.formatted(date: .abbreviated, time: .omitted)
                         self.claudeStatus = "connected (key reports lifetime spend; counting this month since \(since))"
+                        if self.rawSnapshot.takenAt != .distantPast { self.apply(self.rawSnapshot) }
                     }
                 } catch {
                     self.claudeStatus = "unavailable: \(error)"

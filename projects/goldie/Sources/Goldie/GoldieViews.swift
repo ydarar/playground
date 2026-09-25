@@ -68,13 +68,15 @@ struct BowlView: View {
 
     // Geometry, as offsets from the bowl's center (y grows downward).
     private var r: CGFloat { size / 2 }
-    /// Water fills 50% (budget gone) to 82% (budget untouched) of the bowl: there's always water to swim in.
-    private var waterTop: CGFloat { r - size * CGFloat(0.5 + 0.32 * clamp01(state.waterLevel)) }
-    private var sandTop: CGFloat { r * 0.52 }
+    /// Water fills 55% (budget gone) to 82% (budget untouched) of the bowl: there's always water to swim in.
+    private var waterTop: CGFloat { r - size * CGFloat(0.55 + 0.27 * clamp01(state.waterLevel)) }
+    private var sandTop: CGFloat { r * 0.58 }
     /// Where Goldie's center may be: under the surface, above the sand (never an inverted range).
     private var swimRange: ClosedRange<CGFloat> {
-        let top = waterTop + r * 0.2
-        return top...max(top, sandTop - r * 0.1)
+        // Margins grow with puff, so a puffed-up Goldie still stays fully underwater.
+        let puff = CGFloat(state.puff)
+        let top = waterTop + r * 0.26 * puff
+        return top...max(top, sandTop - r * 0.24 * puff)
     }
     /// The bowl is a sphere with the top cut off at ±30° around the top.
     private var rimY: CGFloat { -r * 0.866 }
@@ -95,6 +97,7 @@ struct BowlView: View {
                                swimRange: swimRange)
                 }
                 .clipShape(Circle())
+                .mask(alignment: .bottom) { Rectangle().frame(height: size - (r + rimY)) }  // open top: nothing above the rim
                 glass
             }
             .frame(width: size, height: size)
@@ -138,7 +141,7 @@ struct BowlView: View {
         let chord = 2 * sqrt(max(0, r * r - waterTop * waterTop))
         return ZStack {
             Rectangle()
-                .fill(LinearGradient(colors: [color.opacity(0.45 + 0.1 * m), color.opacity(0.7 + 0.1 * m)],
+                .fill(LinearGradient(colors: [color.opacity(0.42 + 0.1 * m), color.opacity(0.3 + 0.1 * m)],
                                      startPoint: .top, endPoint: .bottom))
                 .frame(width: size, height: depth)
                 .offset(y: waterTop + depth / 2)
