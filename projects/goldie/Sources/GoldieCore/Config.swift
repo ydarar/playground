@@ -31,6 +31,10 @@ public struct GoldieConfig: Codable, Equatable {
     public var cursorUsageAPI: Bool = true
     /// Monthly AI budget. Goldie's water level is the share of it that's left.
     public var monthlyBudgetUSD: Double = 800
+
+    /// Policy: no models from Chinese vendors. Matched case-insensitively against model names.
+    /// Goldie's own brain refuses to run on a match; Cursor chats using one get flagged.
+    public var blockedModelKeywords: [String] = ModelPolicy.defaultBlockedKeywords
     public var usageRefreshMinutes: Double = 2
     /// A usage event is matched to the chat with agent activity closest in time, within this window.
     public var attributionToleranceSeconds: Double = 120
@@ -87,7 +91,22 @@ public struct LLMConfig: Codable, Equatable {
     public var enabled: Bool = true
     /// Any OpenAI-compatible chat endpoint. Default: `mlx_lm.server` on this Mac.
     public var endpoint: String = "http://127.0.0.1:8080/v1/chat/completions"
-    public var model: String = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    public var model: String = "mlx-community/Llama-3.2-3B-Instruct-4bit"
     public var timeoutSeconds: Double = 30
     public init() {}
+}
+
+public enum ModelPolicy {
+    /// Alibaba (Qwen/QwQ), DeepSeek, Zhipu (GLM), Baichuan, Shanghai AI Lab (InternLM), MiniMax,
+    /// Moonshot (Kimi), Tencent (Hunyuan), Baidu (ERNIE), 01.AI (Yi), ByteDance (Doubao).
+    public static let defaultBlockedKeywords = [
+        "qwen", "qwq", "deepseek", "glm", "baichuan", "internlm", "minimax",
+        "moonshot", "kimi", "hunyuan", "ernie", "01-ai", "/yi-", "doubao",
+    ]
+
+    /// The keyword that blocks this model, if any.
+    public static func blockedKeyword(for model: String?, keywords: [String]) -> String? {
+        guard let name = model?.lowercased(), !name.isEmpty else { return nil }
+        return keywords.first { !$0.isEmpty && name.contains($0.lowercased()) }
+    }
 }

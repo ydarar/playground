@@ -220,4 +220,16 @@ final class GoldieCoreTests: XCTestCase {
         XCTAssertEqual(s.monthUSD ?? 0, 10, accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(s.projectedMonthUSD ?? 0, 10)
     }
+
+    func testModelPolicyBlocksChineseVendors() {
+        let k = ModelPolicy.defaultBlockedKeywords
+        XCTAssertNotNil(ModelPolicy.blockedKeyword(for: "mlx-community/Qwen3-4B-Instruct-2507-4bit", keywords: k))
+        XCTAssertNotNil(ModelPolicy.blockedKeyword(for: "deepseek-v3.1", keywords: k))
+        XCTAssertNotNil(ModelPolicy.blockedKeyword(for: "kimi-k2", keywords: k))
+        XCTAssertNil(ModelPolicy.blockedKeyword(for: "mlx-community/Llama-3.2-3B-Instruct-4bit", keywords: k))
+        XCTAssertNil(ModelPolicy.blockedKeyword(for: "grok-4.7", keywords: k))
+        XCTAssertNil(ModelPolicy.blockedKeyword(for: "claude-sonnet-5", keywords: k))
+        XCTAssertNil(ModelPolicy.blockedKeyword(for: nil, keywords: k))
+        XCTAssertEqual(GoldieConfig().llm.model, "mlx-community/Llama-3.2-3B-Instruct-4bit")
+    }
 }

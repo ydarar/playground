@@ -429,6 +429,9 @@ struct ThreadRow: View {
 
     /// The one thing worth knowing, in plain words.
     private var adviceLine: String? {
+        if ModelPolicy.blockedKeyword(for: thread.model, keywords: engine.config.blockedModelKeywords) != nil {
+            return "⛔︎ Uses \(thread.model ?? "a blocked model"), a Chinese-vendor model. Switch to an approved model."
+        }
         if thread.maxRepeatCommand >= 3, let cmd = thread.topRepeatedCommand {
             return "⚠︎ Ran `\(cmd.prefix(40))` \(thread.maxRepeatCommand)× in a row. Probably stuck."
         }

@@ -66,8 +66,13 @@ final class GoldieEngine: ObservableObject {
         config = GoldieConfig.load()
         collector = SnapshotCollector(config: config)
         judge = Judge(config: config)
-        llm = config.llm.enabled ? LLMBrain(config: config.llm) : nil
-        brainStatus = llm == nil ? "rules (LLM off)" : "rules (waiting for LLM)"
+        let blocked = ModelPolicy.blockedKeyword(for: config.llm.model, keywords: config.blockedModelKeywords)
+        llm = config.llm.enabled && blocked == nil ? LLMBrain(config: config.llm) : nil
+        if blocked != nil {
+            brainStatus = "rules (brain model not allowed by policy: \(config.llm.model))"
+        } else {
+            brainStatus = llm == nil ? "rules (LLM off)" : "rules (waiting for LLM)"
+        }
         usageClient = config.cursorUsageAPI ? CursorUsageClient() : nil
         usageStatus = usageClient == nil ? "off in config" : "connecting…"
     }

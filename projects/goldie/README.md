@@ -69,9 +69,9 @@ swift test                                    # core logic tests
 # 2. Install the observe-only Cursor hooks (keeps any hooks you already have; backs up hooks.json):
 .build/release/goldiectl install-cursor-hooks # then restart Cursor
 
-# 3. Optional but recommended: the local brain (MLX on Apple Silicon, ~2.5 GB download on first run)
+# 3. Optional but recommended: the local brain (MLX on Apple Silicon; Meta Llama 3.2 3B, ~1.8 GB download on first run)
 pip install mlx-lm
-mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-4bit --port 8080
+mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit --port 8080
 
 # 4. Launch Goldie
 .build/release/Goldie
@@ -93,10 +93,12 @@ Remove the hooks: `.build/release/goldiectl uninstall-cursor-hooks`.
   "parallelAlarm": 4,
   "speechCooldownMinutes": 15,
   "llm": { "enabled": true, "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
-           "model": "mlx-community/Qwen3-4B-Instruct-2507-4bit" },
+           "model": "mlx-community/Llama-3.2-3B-Instruct-4bit" },
   "inputPricePerMTok": {}
 }
 ```
+
+**Model policy: non-Chinese models only.** `blockedModelKeywords` (default: Qwen/QwQ, DeepSeek, GLM, Baichuan, InternLM, MiniMax, Kimi/Moonshot, Hunyuan, ERNIE, Yi, Doubao) stops Goldie's brain from running on a matching model. Any Cursor chat using one is flagged ⛔︎ in the details card. Non-Chinese alternatives for the brain include Google Gemma 3 and Microsoft Phi-4-mini (MLX builds on `mlx-community`).
 
 `inputPricePerMTok` is optional. Add e.g. `{"grok": <$ per 1M input tokens>}` to see `$/turn` estimates.
 
